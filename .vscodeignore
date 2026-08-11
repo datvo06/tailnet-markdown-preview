@@ -1,0 +1,12 @@
+.github/**
+coverage/**
+src/**
+test/**
+scripts/**
+node_modules/**
+dist/src/**
+*.config.*
+tsconfig*.json
+eslint.config.mjs
+.vscode-test/**
+.env
