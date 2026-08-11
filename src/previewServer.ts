@@ -1,6 +1,7 @@
 import { createReadStream, promises as fs } from "fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http";
 import * as path from "path";
+import { randomBytes, randomUUID } from "crypto";
 import { lookup } from "mime-types";
 
 import { buildPreviewPage, escapeHtml } from "./html";
@@ -12,7 +13,12 @@ import {
   resolveInsideRoot,
   shouldSkipRelativePath
 } from "./paths";
-import type { PreviewServerInfo, PreviewServerOptions } from "./types";
+import type {
+  EditRequestRecord,
+  EditRunner,
+  PreviewServerInfo,
+  PreviewServerOptions
+} from "./types";
 
 interface ActiveServer {
   readonly server: Server;
@@ -26,9 +32,34 @@ interface ServerState {
   readonly port: number;
   readonly allowHtml: boolean;
   readonly renderer: MarkdownRenderer;
+  readonly editToken: string;
+  editRunner: EditRunner | undefined;
+  readonly editRequests: Map<string, MutableEditRequestRecord>;
+  editRunning: boolean;
   selectedFile: string;
   tailscaleServeUrl: string | undefined;
   readonly openedFiles: Set<string>;
+}
+
+interface MutableEditRequestRecord {
+  id: string;
+  root: string;
+  file: string;
+  selectedText: string;
+  comment: string;
+  createdAt: string;
+  updatedAt: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  provider: string;
+  summary: string | undefined;
+  error: string | undefined;
+}
+
+interface EditRequestPayload {
+  readonly file?: unknown;
+  readonly selectedText?: unknown;
+  readonly comment?: unknown;
+  readonly token?: unknown;
 }
 
 export class PreviewServer {
@@ -38,6 +69,7 @@ export class PreviewServer {
     const file = normalizeRelativePath(options.file);
     if (this.active !== undefined && canReuseServer(this.active.state, options)) {
       this.active.state.publicHost = options.publicHost;
+      this.active.state.editRunner = options.editRunner;
       this.active.state.tailscaleServeUrl = undefined;
       this.active.state.selectedFile = file;
       this.active.state.openedFiles.add(file);
@@ -54,6 +86,10 @@ export class PreviewServer {
       port: options.port,
       allowHtml: options.allowHtml,
       renderer,
+      editToken: randomBytes(18).toString("hex"),
+      editRunner: options.editRunner,
+      editRequests: new Map(),
+      editRunning: false,
       selectedFile: file,
       tailscaleServeUrl: undefined,
       openedFiles: new Set([file])
@@ -117,7 +153,30 @@ export class PreviewServer {
         return;
       }
 
+      if (url.pathname === "/api/edit-requests" && request.method === "GET") {
+        if (!isAuthorized(url, state)) {
+          sendJson(response, 403, { error: "Invalid preview token." });
+          return;
+        }
+        sendJson(response, 200, { requests: serializeEditRequests(state) });
+        return;
+      }
+
+      if (url.pathname === "/api/edit-requests" && request.method === "POST") {
+        const body = await readJsonBody(request);
+        if (!isAuthorized(url, state, body)) {
+          sendJson(response, 403, { error: "Invalid preview token." });
+          return;
+        }
+        await this.submitEditRequest(response, state, body);
+        return;
+      }
+
       if (url.pathname === "/api/open-files" && request.method === "DELETE") {
+        if (!isAuthorized(url, state)) {
+          sendJson(response, 403, { error: "Invalid preview token." });
+          return;
+        }
         this.closeOpenFile(response, state, url.searchParams.get("file"));
         return;
       }
@@ -133,7 +192,12 @@ export class PreviewServer {
       }
 
       if (url.pathname === "/") {
-        await this.servePage(response, state, url.searchParams.get("file") ?? firstOpenedFile(state));
+        await this.servePage(
+          response,
+          state,
+          url.searchParams.get("file") ?? firstOpenedFile(state),
+          isAuthorized(url, state)
+        );
         return;
       }
 
@@ -147,7 +211,8 @@ export class PreviewServer {
   private async servePage(
     response: ServerResponse,
     state: ServerState,
-    requestedFile: string
+    requestedFile: string,
+    canEdit: boolean
   ): Promise<void> {
     const selectedFile = normalizeRelativePath(decodeURIComponent(requestedFile));
     const markdownFiles = await listMarkdownFiles(state.root);
@@ -178,10 +243,103 @@ export class PreviewServer {
         selectedFile,
         renderedMarkdown,
         markdownFiles,
-        openedFiles: [...state.openedFiles]
+        openedFiles: [...state.openedFiles],
+        editToken: canEdit ? state.editToken : undefined,
+        editRequests: canEdit ? serializeEditRequests(state) : []
       }),
       "text/html; charset=utf-8"
     );
+  }
+
+  private async submitEditRequest(
+    response: ServerResponse,
+    state: ServerState,
+    body: EditRequestPayload
+  ): Promise<void> {
+    if (typeof body.file !== "string" || typeof body.selectedText !== "string" || typeof body.comment !== "string") {
+      sendJson(response, 400, { error: "Expected file, selectedText, and comment." });
+      return;
+    }
+
+    const file = normalizeRelativePath(body.file);
+    const filePath = resolveInsideRoot(state.root, file);
+    if (!isMarkdownPath(filePath)) {
+      sendJson(response, 400, { error: "Edit requests are only supported for Markdown files." });
+      return;
+    }
+    const stats = await fs.stat(filePath).catch((error: unknown) => {
+      if (hasCode(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (stats === undefined || !stats.isFile()) {
+      sendJson(response, 404, { error: "Markdown file not found." });
+      return;
+    }
+    if (body.selectedText.trim().length === 0 || body.comment.trim().length === 0) {
+      sendJson(response, 400, { error: "Selection and comment are required." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const record: MutableEditRequestRecord = {
+      id: randomUUID(),
+      root: state.root,
+      file,
+      selectedText: body.selectedText.trim().slice(0, 4000),
+      comment: body.comment.trim().slice(0, 4000),
+      createdAt: now,
+      updatedAt: now,
+      status: "queued",
+      provider: state.editRunner === undefined ? "queue" : "pending",
+      summary: undefined,
+      error: undefined
+    };
+    state.editRequests.set(record.id, record);
+    trimEditRequests(state);
+    this.processEditQueue(state);
+    sendJson(response, 202, { request: serializeEditRequest(record) });
+  }
+
+  private processEditQueue(state: ServerState): void {
+    if (state.editRunning || state.editRunner === undefined) {
+      return;
+    }
+
+    const next = [...state.editRequests.values()].find((record) => record.status === "queued");
+    if (next === undefined) {
+      return;
+    }
+
+    state.editRunning = true;
+    next.status = "running";
+    next.updatedAt = new Date().toISOString();
+    void state
+      .editRunner({
+        id: next.id,
+        root: next.root,
+        file: next.file,
+        selectedText: next.selectedText,
+        comment: next.comment,
+        createdAt: next.createdAt
+      })
+      .then((result) => {
+        next.status = "succeeded";
+        next.provider = result.provider;
+        next.summary = result.summary;
+        next.updatedAt = new Date().toISOString();
+      })
+      .catch((error: unknown) => {
+        next.status = "failed";
+        next.provider = next.provider === "pending" ? "agent" : next.provider;
+        next.error = error instanceof Error ? error.message : "Unknown edit agent error.";
+        next.updatedAt = new Date().toISOString();
+      })
+      .finally(() => {
+        state.editRunning = false;
+        this.processEditQueue(state);
+      });
   }
 
   private closeOpenFile(response: ServerResponse, state: ServerState, requestedFile: string | null): void {
@@ -260,9 +418,10 @@ export class PreviewServer {
   }
 }
 
-export function buildPreviewUrl(host: string, port: number, file: string): string {
+export function buildPreviewUrl(host: string, port: number, file: string, token?: string): string {
   const urlHost = host.includes(":") ? `[${host}]` : host;
-  return `http://${urlHost}:${port}/?file=${encodeURIComponent(file)}`;
+  const tokenPart = token === undefined ? "" : `&token=${encodeURIComponent(token)}`;
+  return `http://${urlHost}:${port}/?file=${encodeURIComponent(file)}${tokenPart}`;
 }
 
 function buildInfo(state: ServerState): PreviewServerInfo {
@@ -272,9 +431,10 @@ function buildInfo(state: ServerState): PreviewServerInfo {
     bindHost: state.bindHost,
     publicHost: state.publicHost,
     port: state.port,
-    url: buildPreviewUrl(state.publicHost, state.port, state.selectedFile),
+    url: buildPreviewUrl(state.publicHost, state.port, state.selectedFile, state.editToken),
     tailscaleServeUrl: state.tailscaleServeUrl,
-    openedFiles: [...state.openedFiles]
+    openedFiles: [...state.openedFiles],
+    editToken: state.editToken
   };
 }
 
@@ -289,6 +449,12 @@ function canReuseServer(state: ServerState, options: PreviewServerOptions): bool
 
 function firstOpenedFile(state: ServerState): string {
   return state.openedFiles.values().next().value ?? state.selectedFile;
+}
+
+function isAuthorized(url: URL, state: ServerState, body?: EditRequestPayload): boolean {
+  const queryToken = url.searchParams.get("token");
+  const bodyToken = typeof body?.token === "string" ? body.token : undefined;
+  return queryToken === state.editToken || bodyToken === state.editToken;
 }
 
 async function listMarkdownFiles(root: string): Promise<string[]> {
@@ -338,6 +504,61 @@ function sendText(response: ServerResponse, status: number, body: string, conten
 
 function sendJson(response: ServerResponse, status: number, body: Record<string, unknown>): void {
   sendText(response, status, JSON.stringify(body), "application/json; charset=utf-8");
+}
+
+function serializeEditRequests(state: ServerState): EditRequestRecord[] {
+  return [...state.editRequests.values()].map(serializeEditRequest);
+}
+
+function serializeEditRequest(record: MutableEditRequestRecord): EditRequestRecord {
+  return {
+    id: record.id,
+    root: record.root,
+    file: record.file,
+    selectedText: record.selectedText,
+    comment: record.comment,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    status: record.status,
+    provider: record.provider,
+    summary: record.summary,
+    error: record.error
+  };
+}
+
+function trimEditRequests(state: ServerState): void {
+  while (state.editRequests.size > 50) {
+    const firstKey = state.editRequests.keys().next().value;
+    if (firstKey === undefined) {
+      return;
+    }
+    state.editRequests.delete(firstKey);
+  }
+}
+
+function readJsonBody(request: IncomingMessage): Promise<EditRequestPayload> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 64 * 1024) {
+        reject(new Error("Request body is too large."));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        resolve(JSON.parse(raw) as EditRequestPayload);
+      } catch (error: unknown) {
+        reject(error instanceof Error ? error : new Error("Invalid JSON."));
+      }
+    });
+    request.on("error", reject);
+  });
 }
 
 function missingDocument(message: string): string {

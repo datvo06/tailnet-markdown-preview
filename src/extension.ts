@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 
+import { createEditRunner } from "./agentRunner";
 import { readPreviewConfig } from "./config";
 import { isMarkdownPath, relativeToRoot } from "./paths";
 import { buildPreviewUrl, PreviewServer } from "./previewServer";
@@ -106,7 +107,7 @@ async function pickFileAndStartViaServe(): Promise<void> {
     return;
   }
 
-  const serveUrl = buildPreviewUrl(dnsName, 443, info.file).replace(/^http:/, "https:").replace(":443/", "/");
+  const serveUrl = buildPreviewUrl(dnsName, 443, info.file, info.editToken).replace(/^http:/, "https:").replace(":443/", "/");
   const updated = server.setTailscaleServeUrl(serveUrl);
   updateStatus(updated);
   await offerUrlActions(serveUrl);
@@ -124,7 +125,8 @@ async function startPreview(
     bindHost: host.bindHost,
     publicHost: host.publicHost,
     port: config.port,
-    allowHtml: config.allowHtml
+    allowHtml: config.allowHtml,
+    editRunner: createEditRunner(config)
   });
 
   output.appendLine(`Serving ${target.label}`);

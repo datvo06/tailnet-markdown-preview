@@ -5,6 +5,7 @@ import { createServer } from "net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { PreviewServer } from "../src/previewServer";
+import type { BrowserEditRequest, EditRunResult } from "../src/types";
 
 describe("PreviewServer", () => {
   let root: string;
@@ -30,30 +31,32 @@ describe("PreviewServer", () => {
       bindHost: "127.0.0.1",
       publicHost: "100.64.0.1",
       port,
-      allowHtml: false
+      allowHtml: false,
+      editRunner: undefined
     });
 
-    expect(info.url).toBe(`http://100.64.0.1:${port}/?file=a.md`);
+    expect(info.url).toBe(`http://100.64.0.1:${port}/?file=a.md&token=${info.editToken}`);
 
-    const response = await fetch(`http://127.0.0.1:${port}/?file=a.md`);
+    const response = await fetch(`http://127.0.0.1:${port}/?file=a.md&token=${info.editToken}`);
     expect(await response.text()).toContain("Open previews");
   });
 
   it("tracks opened files and closes them through the HTTP API", async () => {
     const port = await getFreePort();
-    await previewServer.start({
+    const info = await previewServer.start({
       root,
       file: "a.md",
       bindHost: "127.0.0.1",
       publicHost: "100.64.0.1",
       port,
-      allowHtml: false
+      allowHtml: false,
+      editRunner: undefined
     });
-    await fetch(`http://127.0.0.1:${port}/?file=b.md`);
+    await fetch(`http://127.0.0.1:${port}/?file=b.md&token=${info.editToken}`);
 
     expect(previewServer.getInfo()?.openedFiles).toEqual(["a.md", "b.md"]);
 
-    const response = await fetch(`http://127.0.0.1:${port}/api/open-files?file=a.md`, {
+    const response = await fetch(`http://127.0.0.1:${port}/api/open-files?file=a.md&token=${info.editToken}`, {
       method: "DELETE"
     });
     const body = (await response.json()) as { readonly nextFile?: string };
@@ -61,6 +64,51 @@ describe("PreviewServer", () => {
     expect(response.status).toBe(200);
     expect(body.nextFile).toBe("b.md");
     expect(previewServer.getInfo()?.openedFiles).toEqual(["b.md"]);
+  });
+
+  it("requires a token for browser edit requests", async () => {
+    const port = await getFreePort();
+    const seenRequests: BrowserEditRequest[] = [];
+    const info = await previewServer.start({
+      root,
+      file: "a.md",
+      bindHost: "127.0.0.1",
+      publicHost: "100.64.0.1",
+      port,
+      allowHtml: false,
+      editRunner: (request): Promise<EditRunResult> => {
+        seenRequests.push(request);
+        return Promise.resolve({
+          provider: "test",
+          summary: "updated"
+        });
+      }
+    });
+
+    const rejected = await fetch(`http://127.0.0.1:${port}/api/edit-requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file: "a.md",
+        selectedText: "A",
+        comment: "Make it stronger."
+      })
+    });
+    expect(rejected.status).toBe(403);
+
+    const accepted = await fetch(`http://127.0.0.1:${port}/api/edit-requests?token=${info.editToken}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file: "a.md",
+        selectedText: "A",
+        comment: "Make it stronger."
+      })
+    });
+
+    expect(accepted.status).toBe(202);
+    await waitFor(() => seenRequests.length === 1);
+    expect(seenRequests[0]?.file).toBe("a.md");
   });
 });
 
@@ -78,4 +126,15 @@ async function getFreePort(): Promise<number> {
     });
     server.on("error", reject);
   });
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition.");
 }

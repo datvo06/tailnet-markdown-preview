@@ -2,7 +2,7 @@
   "name": "tailnet-markdown-preview",
   "displayName": "Tailnet Markdown Preview",
   "description": "Serve the current Markdown file as a browser preview that Android devices can open over Tailscale.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "datnguyen",
   "license": "MIT",
   "repository": {
@@ -94,6 +94,45 @@
           "type": "boolean",
           "default": false,
           "description": "Open the preview URL in the local browser when the server starts."
+        },
+        "tailnetMarkdownPreview.editProvider": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "codex",
+            "claude",
+            "queue"
+          ],
+          "enumDescriptions": [
+            "Use Codex CLI when available, then Claude Code, otherwise keep requests queued.",
+            "Use Codex CLI through `codex exec`.",
+            "Use Claude Code through `claude --print`.",
+            "Capture requests without running an agent."
+          ],
+          "description": "How browser edit requests should be handled."
+        },
+        "tailnetMarkdownPreview.editModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model passed to the selected edit agent. Leave empty, or use `latest`, to let the CLI choose its current default model."
+        },
+        "tailnetMarkdownPreview.codexBinary": {
+          "type": "string",
+          "default": "codex",
+          "description": "Command or absolute path for the Codex CLI."
+        },
+        "tailnetMarkdownPreview.claudeBinary": {
+          "type": "string",
+          "default": "claude",
+          "description": "Command or absolute path for Claude Code."
+        },
+        "tailnetMarkdownPreview.editTimeoutSeconds": {
+          "type": "number",
+          "default": 600,
+          "minimum": 30,
+          "maximum": 3600,
+          "description": "Maximum runtime for one browser-submitted edit request."
         }
       }
     },

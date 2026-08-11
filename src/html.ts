@@ -1,10 +1,13 @@
 import { encodePathSegments } from "./paths";
+import type { EditRequestRecord } from "./types";
 
 export interface PreviewPageInput {
   readonly selectedFile: string;
   readonly renderedMarkdown: string;
   readonly markdownFiles: readonly string[];
   readonly openedFiles: readonly string[];
+  readonly editToken: string | undefined;
+  readonly editRequests: readonly EditRequestRecord[];
 }
 
 const highlightStyles = `
@@ -183,6 +186,83 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
 .task-list-item{list-style:none}
 .task-list-item input{margin:0 0.5em 0 -1.4em}
 .missing{background:#fee2e2;border:1px solid #b91c1c;border-radius:8px;color:#7f1d1d;padding:16px}
+.selection-tools{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:6px;
+  box-shadow:var(--shadow);
+  display:none;
+  gap:6px;
+  padding:6px;
+  position:fixed;
+  z-index:20;
+}
+.selection-tools.visible{display:flex}
+.selection-tools button,.comment-panel button{
+  background:var(--accent);
+  border:0;
+  border-radius:6px;
+  color:var(--panel);
+  cursor:pointer;
+  font:inherit;
+  font-size:13px;
+  padding:7px 10px;
+}
+.comment-panel{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:8px;
+  bottom:18px;
+  box-shadow:var(--shadow);
+  display:none;
+  max-width:min(420px,calc(100vw - 36px));
+  padding:14px;
+  position:fixed;
+  right:18px;
+  width:420px;
+  z-index:30;
+}
+.comment-panel.visible{display:block}
+.comment-panel label,.edit-requests-title{
+  color:var(--muted);
+  display:block;
+  font-size:12px;
+  font-weight:700;
+  margin-bottom:6px;
+}
+.selected-preview{
+  background:var(--code-bg);
+  border-radius:6px;
+  color:var(--muted);
+  font-size:12px;
+  max-height:90px;
+  overflow:auto;
+  padding:8px;
+}
+.comment-panel textarea{
+  background:var(--bg);
+  border:1px solid var(--line);
+  border-radius:6px;
+  color:var(--text);
+  display:block;
+  font:inherit;
+  height:94px;
+  margin:10px 0;
+  padding:8px;
+  resize:vertical;
+  width:100%;
+}
+.comment-actions{display:flex;gap:8px;justify-content:flex-end}
+.comment-actions .secondary{background:transparent;border:1px solid var(--line);color:var(--text)}
+.edit-requests{display:grid;gap:6px;margin-top:12px}
+.edit-request{
+  border:1px solid var(--line);
+  border-radius:6px;
+  color:var(--muted);
+  font-size:12px;
+  padding:7px 8px;
+}
+.edit-request strong{color:var(--text);display:block;font-size:12px;font-weight:700}
 @media (max-width:760px){
   .shell{display:block}
   .sidebar{border-bottom:1px solid var(--line);border-right:0;min-height:auto;position:static}
@@ -195,7 +275,17 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
 ${highlightStyles}`;
 
 const clientScript = `
-const currentFile = new URLSearchParams(location.search).get("file") || "";
+const params = new URLSearchParams(location.search);
+const currentFile = params.get("file") || "";
+const editToken = params.get("token") || window.localStorage.getItem("tailnetMarkdownPreview.editToken") || "";
+if (editToken) window.localStorage.setItem("tailnetMarkdownPreview.editToken", editToken);
+const canEdit = document.body.dataset.canEdit === "true" && Boolean(editToken);
+const withToken = (url) => {
+  if (!editToken) return url;
+  const next = new URL(url, location.href);
+  next.searchParams.set("token", editToken);
+  return next.pathname + next.search + next.hash;
+};
 document.querySelectorAll("[data-file]").forEach((link) => {
   if (link.dataset.file === currentFile) link.classList.add("active");
 });
@@ -213,7 +303,7 @@ document.addEventListener("click", (event) => {
   if (closeButton) {
     event.preventDefault();
     const file = closeButton.dataset.closeFile;
-    fetch("/api/open-files?file=" + encodeURIComponent(file), { method: "DELETE" })
+    fetch(withToken("/api/open-files?file=" + encodeURIComponent(file)), { method: "DELETE" })
       .then((response) => response.json())
       .then((result) => {
         if (file === currentFile) {
@@ -236,12 +326,99 @@ document.addEventListener("click", (event) => {
   if (url.pathname.startsWith("/raw/") && url.pathname.toLowerCase().endsWith(".md")) {
     event.preventDefault();
     const file = decodeURIComponent(url.pathname.slice("/raw/".length));
-    location.href = "/?file=" + encodeURIComponent(file);
+    location.href = withToken("/?file=" + encodeURIComponent(file));
   }
 });
 if (currentFile && window.EventSource) {
   const events = new EventSource("/events?file=" + encodeURIComponent(currentFile));
   events.addEventListener("reload", () => location.reload());
+}
+
+let selectedText = "";
+const markdownBody = document.querySelector(".markdown-body");
+const selectionTools = document.querySelector("#selection-tools");
+const commentPanel = document.querySelector("#comment-panel");
+const selectedPreview = document.querySelector("#selected-preview");
+const commentText = document.querySelector("#comment-text");
+const editRequestList = document.querySelector("#edit-requests");
+
+if (canEdit && markdownBody && selectionTools && commentPanel) {
+  document.addEventListener("selectionchange", () => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const text = selection.toString().trim();
+    const anchor = selection.anchorNode;
+    if (!text || !anchor || !markdownBody.contains(anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : anchor)) {
+      selectionTools.classList.remove("visible");
+      return;
+    }
+    selectedText = text.slice(0, 4000);
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    selectionTools.style.left = Math.min(rect.left, window.innerWidth - 170) + "px";
+    selectionTools.style.top = Math.max(8, rect.top - 46) + "px";
+    selectionTools.classList.add("visible");
+  });
+
+  document.querySelector("#open-comment")?.addEventListener("click", () => {
+    selectedPreview.textContent = selectedText;
+    commentText.value = "";
+    commentPanel.classList.add("visible");
+    commentText.focus();
+  });
+
+  document.querySelector("#cancel-comment")?.addEventListener("click", () => {
+    commentPanel.classList.remove("visible");
+  });
+
+  document.querySelector("#submit-comment")?.addEventListener("click", () => {
+    const comment = commentText.value.trim();
+    if (!comment || !selectedText) return;
+    fetch(withToken("/api/edit-requests"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: editToken, file: currentFile, selectedText, comment })
+    })
+      .then((response) => response.json())
+      .then(() => {
+        commentPanel.classList.remove("visible");
+        selectionTools.classList.remove("visible");
+        return refreshEditRequests();
+      })
+      .catch(() => refreshEditRequests());
+  });
+
+  setInterval(() => {
+    void refreshEditRequests();
+  }, 2500);
+}
+
+function refreshEditRequests() {
+  if (!editRequestList || !editToken) return Promise.resolve();
+  return fetch(withToken("/api/edit-requests"))
+    .then((response) => response.json())
+    .then((result) => {
+      const requests = Array.isArray(result.requests) ? result.requests : [];
+      editRequestList.innerHTML = requests.map(renderEditRequest).join("");
+    });
+}
+
+function renderEditRequest(request) {
+  const status = String(request.status || "queued");
+  const provider = String(request.provider || "queue");
+  const file = String(request.file || "");
+  const message = request.error || request.summary || request.comment || "";
+  return '<div class="edit-request"><strong>' + escapeText(status + " - " + provider) + '</strong>' +
+    '<div>' + escapeText(file) + '</div><div>' + escapeText(String(message).slice(0, 180)) + '</div></div>';
+}
+
+function escapeText(value) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[char]));
 }`;
 
 export function escapeHtml(value: string): string {
@@ -254,20 +431,27 @@ export function escapeHtml(value: string): string {
 }
 
 export function buildPreviewPage(input: PreviewPageInput): string {
+  const tokenQuery = input.editToken === undefined ? "" : `&token=${encodeURIComponent(input.editToken)}`;
   const selectedDir = input.selectedFile.includes("/")
     ? input.selectedFile.slice(0, input.selectedFile.lastIndexOf("/"))
     : "";
   const baseHref = selectedDir.length > 0 ? `/raw/${encodePathSegments(selectedDir)}/` : "/raw/";
   const openedLinks = input.openedFiles
     .map((file) => {
-      const href = `/?file=${encodeURIComponent(file)}`;
-      return `<div class="open-file"><a href="${href}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a><button class="close-file" type="button" data-close-file="${escapeHtml(file)}" aria-label="Close ${escapeHtml(file)}">×</button></div>`;
+      const href = `/?file=${encodeURIComponent(file)}${tokenQuery}`;
+      return `<div class="open-file"><a href="${href}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a><button class="close-file" type="button" data-close-file="${escapeHtml(file)}" aria-label="Close ${escapeHtml(file)}">x</button></div>`;
     })
     .join("");
   const links = input.markdownFiles
     .map((file) => {
-      const href = `/?file=${encodeURIComponent(file)}`;
+      const href = `/?file=${encodeURIComponent(file)}${tokenQuery}`;
       return `<a href="${href}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a>`;
+    })
+    .join("");
+  const editRequests = input.editRequests
+    .map((request) => {
+      const message = request.error ?? request.summary ?? request.comment;
+      return `<div class="edit-request"><strong>${escapeHtml(`${request.status} - ${request.provider}`)}</strong><div>${escapeHtml(request.file)}</div><div>${escapeHtml(message.slice(0, 180))}</div></div>`;
     })
     .join("");
 
@@ -280,7 +464,7 @@ export function buildPreviewPage(input: PreviewPageInput): string {
   <title>${escapeHtml(input.selectedFile)} - Markdown Preview</title>
   <style>${styles}</style>
 </head>
-<body>
+<body data-can-edit="${input.editToken === undefined ? "false" : "true"}">
   <div class="shell">
     <aside class="sidebar">
       <div class="brand"><strong>Markdown Preview</strong><span>${input.openedFiles.length} open</span></div>
@@ -289,6 +473,8 @@ export function buildPreviewPage(input: PreviewPageInput): string {
       <div class="section-title">Workspace files</div>
       <input id="file-search" class="search" type="search" autocomplete="off" placeholder="Filter files">
       <nav class="files" aria-label="Markdown files">${links}</nav>
+      <div class="section-title">Edit requests</div>
+      <div id="edit-requests" class="edit-requests">${editRequests}</div>
     </aside>
     <main class="page">
       <article class="doc">
@@ -297,6 +483,17 @@ export function buildPreviewPage(input: PreviewPageInput): string {
       </article>
     </main>
   </div>
+  <div id="selection-tools" class="selection-tools"><button id="open-comment" type="button">Comment</button></div>
+  <section id="comment-panel" class="comment-panel" aria-label="Markdown edit request">
+    <label>Selected text</label>
+    <div id="selected-preview" class="selected-preview"></div>
+    <label for="comment-text">Edit comment</label>
+    <textarea id="comment-text" placeholder="Describe the edit to make"></textarea>
+    <div class="comment-actions">
+      <button id="cancel-comment" class="secondary" type="button">Cancel</button>
+      <button id="submit-comment" type="button">Submit</button>
+    </div>
+  </section>
   <script>${clientScript}</script>
 </body>
 </html>`;

@@ -11,6 +11,8 @@ This extension starts a small HTTP preview server from inside VS Code or Cursor.
 - Auto-refreshes connected browsers when the Markdown file changes.
 - Uses the machine's current Tailscale IPv4 address when the preview starts.
 - Keeps a browser-side list of opened previews and lets you close entries from that list.
+- Lets the browser submit highlighted-text edit requests for a Markdown file.
+- Can route browser edit requests through Codex CLI, Claude Code, or a queue-only mode.
 - Can try `tailscale serve --bg` for a MagicDNS HTTPS URL, then falls back to the direct Tailscale IP if Serve is disabled.
 
 ## Install from source
@@ -49,6 +51,20 @@ If the Tailscale address changes later, run the start command again. The extensi
 
 Starting another Markdown file in the same workspace adds it to the "Open previews" list instead of replacing the running server. The browser UI can close files from that list. Closing a file removes it from the preview list; it does not close the editor tab in VS Code or Cursor.
 
+## Browser edit requests
+
+Open the copied preview URL, select text in the rendered Markdown, then choose "Comment". The browser sends the selected rendered text plus your comment back to the local extension server.
+
+By default, edit requests use `auto` mode:
+
+1. Try Codex CLI through `codex exec`.
+2. If Codex is not available, try Claude Code through `claude --print`.
+3. If neither CLI is available, keep the request queued in the browser status list.
+
+The extension does not inject text into an already-running terminal TUI. That would depend on brittle terminal automation. It uses each CLI's non-interactive mode instead, which is the stable route for local automation.
+
+Copied preview URLs include a random token. Browser edit and close actions require that token, so another tailnet device cannot submit edits by guessing the server address.
+
 ## Tailscale Serve mode
 
 Run this command when you want to try a MagicDNS HTTPS URL:
@@ -82,6 +98,11 @@ Note: when Serve succeeds, it updates the Tailscale Serve config for the selecte
 | `tailnetMarkdownPreview.tailscaleBinary` | empty | Optional path to the Tailscale CLI. The extension also checks the macOS app CLI path. |
 | `tailnetMarkdownPreview.allowHtml` | `false` | Allow raw HTML inside Markdown. Keep it off for untrusted files. |
 | `tailnetMarkdownPreview.autoOpenLocalBrowser` | `false` | Open the preview URL locally after start. |
+| `tailnetMarkdownPreview.editProvider` | `auto` | Use `auto`, `codex`, `claude`, or `queue` for browser edit requests. |
+| `tailnetMarkdownPreview.editModel` | empty | Optional model for the selected edit agent. Leave empty, or set `latest`, to let the CLI use its current default model. |
+| `tailnetMarkdownPreview.codexBinary` | `codex` | Command or absolute path for Codex CLI. |
+| `tailnetMarkdownPreview.claudeBinary` | `claude` | Command or absolute path for Claude Code. |
+| `tailnetMarkdownPreview.editTimeoutSeconds` | `600` | Maximum runtime for one browser-submitted edit request. |
 
 ## Development
 
