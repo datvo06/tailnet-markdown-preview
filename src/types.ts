@@ -17,7 +17,8 @@ export interface PreviewTarget {
 export interface PreviewServerOptions {
   readonly root: string;
   readonly file: string;
-  readonly host: string;
+  readonly bindHost: string;
+  readonly publicHost: string;
   readonly port: number;
   readonly allowHtml: boolean;
 }
@@ -25,10 +26,12 @@ export interface PreviewServerOptions {
 export interface PreviewServerInfo {
   readonly root: string;
   readonly file: string;
-  readonly host: string;
+  readonly bindHost: string;
+  readonly publicHost: string;
   readonly port: number;
   readonly url: string;
   readonly tailscaleServeUrl: string | undefined;
+  readonly openedFiles: readonly string[];
 }
 
 export interface Logger {

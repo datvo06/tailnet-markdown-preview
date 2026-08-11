@@ -16,40 +16,62 @@ import type { PreviewServerInfo, PreviewServerOptions } from "./types";
 
 interface ActiveServer {
   readonly server: Server;
-  readonly info: PreviewServerInfo;
+  readonly state: ServerState;
+}
+
+interface ServerState {
+  readonly root: string;
+  readonly bindHost: string;
+  publicHost: string;
+  readonly port: number;
+  readonly allowHtml: boolean;
+  readonly renderer: MarkdownRenderer;
+  selectedFile: string;
+  tailscaleServeUrl: string | undefined;
+  readonly openedFiles: Set<string>;
 }
 
 export class PreviewServer {
   private active: ActiveServer | undefined;
 
   public async start(options: PreviewServerOptions): Promise<PreviewServerInfo> {
+    const file = normalizeRelativePath(options.file);
+    if (this.active !== undefined && canReuseServer(this.active.state, options)) {
+      this.active.state.publicHost = options.publicHost;
+      this.active.state.tailscaleServeUrl = undefined;
+      this.active.state.selectedFile = file;
+      this.active.state.openedFiles.add(file);
+      return buildInfo(this.active.state);
+    }
+
     await this.stop();
 
     const renderer = new MarkdownRenderer(options.allowHtml);
-    const file = normalizeRelativePath(options.file);
+    const state: ServerState = {
+      root: options.root,
+      bindHost: options.bindHost,
+      publicHost: options.publicHost,
+      port: options.port,
+      allowHtml: options.allowHtml,
+      renderer,
+      selectedFile: file,
+      tailscaleServeUrl: undefined,
+      openedFiles: new Set([file])
+    };
     const server = createServer((request, response) => {
-      void this.handleRequest(request, response, options.root, file, renderer);
+      void this.handleRequest(request, response, state);
     });
 
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(options.port, options.host, () => {
+      server.listen(options.port, options.bindHost, () => {
         server.off("error", reject);
         resolve();
       });
     });
 
-    const url = buildPreviewUrl(options.host, options.port, file);
-    const info: PreviewServerInfo = {
-      root: options.root,
-      file,
-      host: options.host,
-      port: options.port,
-      url,
-      tailscaleServeUrl: undefined
-    };
-    this.active = { server, info };
-    return info;
+    this.active = { server, state };
+    return buildInfo(state);
   }
 
   public async stop(): Promise<void> {
@@ -71,7 +93,7 @@ export class PreviewServer {
   }
 
   public getInfo(): PreviewServerInfo | undefined {
-    return this.active?.info;
+    return this.active === undefined ? undefined : buildInfo(this.active.state);
   }
 
   public setTailscaleServeUrl(url: string): PreviewServerInfo | undefined {
@@ -79,23 +101,14 @@ export class PreviewServer {
       return undefined;
     }
 
-    const info: PreviewServerInfo = {
-      ...this.active.info,
-      tailscaleServeUrl: url
-    };
-    this.active = {
-      server: this.active.server,
-      info
-    };
-    return info;
+    this.active.state.tailscaleServeUrl = url;
+    return buildInfo(this.active.state);
   }
 
   private async handleRequest(
     request: IncomingMessage,
     response: ServerResponse,
-    root: string,
-    defaultFile: string,
-    renderer: MarkdownRenderer
+    state: ServerState
   ): Promise<void> {
     try {
       const url = new URL(request.url ?? "/", "http://preview.local");
@@ -104,18 +117,23 @@ export class PreviewServer {
         return;
       }
 
+      if (url.pathname === "/api/open-files" && request.method === "DELETE") {
+        this.closeOpenFile(response, state, url.searchParams.get("file"));
+        return;
+      }
+
       if (url.pathname === "/events") {
-        await this.streamEvents(request, response, root, url.searchParams.get("file") ?? defaultFile);
+        await this.streamEvents(request, response, state.root, url.searchParams.get("file") ?? state.selectedFile);
         return;
       }
 
       if (url.pathname.startsWith("/raw/")) {
-        await this.serveRaw(response, root, url.pathname.slice("/raw/".length));
+        await this.serveRaw(response, state.root, url.pathname.slice("/raw/".length));
         return;
       }
 
       if (url.pathname === "/") {
-        await this.servePage(response, root, url.searchParams.get("file") ?? defaultFile, renderer);
+        await this.servePage(response, state, url.searchParams.get("file") ?? firstOpenedFile(state));
         return;
       }
 
@@ -128,13 +146,12 @@ export class PreviewServer {
 
   private async servePage(
     response: ServerResponse,
-    root: string,
-    requestedFile: string,
-    renderer: MarkdownRenderer
+    state: ServerState,
+    requestedFile: string
   ): Promise<void> {
     const selectedFile = normalizeRelativePath(decodeURIComponent(requestedFile));
-    const markdownFiles = await listMarkdownFiles(root);
-    const filePath = resolveInsideRoot(root, selectedFile);
+    const markdownFiles = await listMarkdownFiles(state.root);
+    const filePath = resolveInsideRoot(state.root, selectedFile);
 
     let renderedMarkdown: string;
     if (!isMarkdownPath(filePath)) {
@@ -142,7 +159,9 @@ export class PreviewServer {
     } else {
       try {
         const source = await fs.readFile(filePath, "utf8");
-        renderedMarkdown = renderer.render(source);
+        state.selectedFile = selectedFile;
+        state.openedFiles.add(selectedFile);
+        renderedMarkdown = state.renderer.render(source);
       } catch (error: unknown) {
         if (hasCode(error, "ENOENT")) {
           renderedMarkdown = missingDocument(`Markdown file not found: ${selectedFile}`);
@@ -155,9 +174,31 @@ export class PreviewServer {
     sendText(
       response,
       200,
-      buildPreviewPage({ selectedFile, renderedMarkdown, markdownFiles }),
+      buildPreviewPage({
+        selectedFile,
+        renderedMarkdown,
+        markdownFiles,
+        openedFiles: [...state.openedFiles]
+      }),
       "text/html; charset=utf-8"
     );
+  }
+
+  private closeOpenFile(response: ServerResponse, state: ServerState, requestedFile: string | null): void {
+    if (requestedFile === null) {
+      sendJson(response, 400, { error: "Missing file." });
+      return;
+    }
+
+    const file = normalizeRelativePath(decodeURIComponent(requestedFile));
+    state.openedFiles.delete(file);
+    if (state.selectedFile === file) {
+      state.selectedFile = firstOpenedFile(state);
+    }
+    sendJson(response, 200, {
+      closed: true,
+      nextFile: state.selectedFile.length > 0 ? state.selectedFile : undefined
+    });
   }
 
   private async serveRaw(response: ServerResponse, root: string, requestedPath: string): Promise<void> {
@@ -224,6 +265,32 @@ export function buildPreviewUrl(host: string, port: number, file: string): strin
   return `http://${urlHost}:${port}/?file=${encodeURIComponent(file)}`;
 }
 
+function buildInfo(state: ServerState): PreviewServerInfo {
+  return {
+    root: state.root,
+    file: state.selectedFile,
+    bindHost: state.bindHost,
+    publicHost: state.publicHost,
+    port: state.port,
+    url: buildPreviewUrl(state.publicHost, state.port, state.selectedFile),
+    tailscaleServeUrl: state.tailscaleServeUrl,
+    openedFiles: [...state.openedFiles]
+  };
+}
+
+function canReuseServer(state: ServerState, options: PreviewServerOptions): boolean {
+  return (
+    state.root === options.root &&
+    state.bindHost === options.bindHost &&
+    state.port === options.port &&
+    state.allowHtml === options.allowHtml
+  );
+}
+
+function firstOpenedFile(state: ServerState): string {
+  return state.openedFiles.values().next().value ?? state.selectedFile;
+}
+
 async function listMarkdownFiles(root: string): Promise<string[]> {
   const files: string[] = [];
 
@@ -267,6 +334,10 @@ function sendText(response: ServerResponse, status: number, body: string, conten
     "Content-Length": Buffer.byteLength(body)
   });
   response.end(body);
+}
+
+function sendJson(response: ServerResponse, status: number, body: Record<string, unknown>): void {
+  sendText(response, status, JSON.stringify(body), "application/json; charset=utf-8");
 }
 
 function missingDocument(message: string): string {

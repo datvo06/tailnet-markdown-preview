@@ -11,10 +11,23 @@ describe("html", () => {
     const page = buildPreviewPage({
       selectedFile: "docs/guide.md",
       renderedMarkdown: "<h1>Guide</h1>",
-      markdownFiles: ["README.md", "docs/guide.md"]
+      markdownFiles: ["README.md", "docs/guide.md"],
+      openedFiles: ["docs/guide.md"]
     });
 
     expect(page).toContain('<base href="/raw/docs/">');
     expect(page).toContain("docs/guide.md");
+  });
+
+  it("renders opened files with close controls", () => {
+    const page = buildPreviewPage({
+      selectedFile: "README.md",
+      renderedMarkdown: "<h1>Readme</h1>",
+      markdownFiles: ["README.md"],
+      openedFiles: ["README.md"]
+    });
+
+    expect(page).toContain("Open previews");
+    expect(page).toContain('data-close-file="README.md"');
   });
 });

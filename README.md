@@ -10,6 +10,7 @@ This extension starts a small HTTP preview server from inside VS Code or Cursor.
 - Serves local images and media from the selected workspace root.
 - Auto-refreshes connected browsers when the Markdown file changes.
 - Uses the machine's current Tailscale IPv4 address when the preview starts.
+- Keeps a browser-side list of opened previews and lets you close entries from that list.
 - Can try `tailscale serve --bg` for a MagicDNS HTTPS URL, then falls back to the direct Tailscale IP if Serve is disabled.
 
 ## Install from source
@@ -46,6 +47,8 @@ Open that URL on Android while the Android device is signed into the same tailne
 
 If the Tailscale address changes later, run the start command again. The extension asks `tailscale ip -4` each time it starts, so it does not reuse an old `100.x.y.z` address.
 
+Starting another Markdown file in the same workspace adds it to the "Open previews" list instead of replacing the running server. The browser UI can close files from that list. Closing a file removes it from the preview list; it does not close the editor tab in VS Code or Cursor.
+
 ## Tailscale Serve mode
 
 Run this command when you want to try a MagicDNS HTTPS URL:
@@ -75,7 +78,7 @@ Note: when Serve succeeds, it updates the Tailscale Serve config for the selecte
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `tailnetMarkdownPreview.port` | `8787` | HTTP server port. |
-| `tailnetMarkdownPreview.hostMode` | `tailnet` | Use `tailnet` for direct Tailscale IP access, or `localhost` for local-only preview. |
+| `tailnetMarkdownPreview.hostMode` | `tailnet` | Use `tailnet` to listen on all interfaces and publish the current Tailscale IP, or `localhost` for local-only preview. |
 | `tailnetMarkdownPreview.tailscaleBinary` | empty | Optional path to the Tailscale CLI. The extension also checks the macOS app CLI path. |
 | `tailnetMarkdownPreview.allowHtml` | `false` | Allow raw HTML inside Markdown. Keep it off for untrusted files. |
 | `tailnetMarkdownPreview.autoOpenLocalBrowser` | `false` | Open the preview URL locally after start. |

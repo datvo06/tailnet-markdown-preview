@@ -14,6 +14,11 @@ import type { PreviewConfig, PreviewServerInfo, PreviewTarget } from "./types";
 
 const server = new PreviewServer();
 
+interface ResolvedPreviewHost {
+  readonly bindHost: string;
+  readonly publicHost: string;
+}
+
 interface StartPreviewOptions {
   readonly offerActions: boolean;
 }
@@ -116,7 +121,8 @@ async function startPreview(
   const info = await server.start({
     root: target.root,
     file: target.file,
-    host,
+    bindHost: host.bindHost,
+    publicHost: host.publicHost,
     port: config.port,
     allowHtml: config.allowHtml
   });
@@ -136,13 +142,20 @@ async function startPreview(
   return info;
 }
 
-async function resolveHost(config: PreviewConfig): Promise<string> {
+async function resolveHost(config: PreviewConfig): Promise<ResolvedPreviewHost> {
   if (config.hostMode === "localhost") {
-    return "127.0.0.1";
+    return {
+      bindHost: "127.0.0.1",
+      publicHost: "127.0.0.1"
+    };
   }
 
   const binary = await findTailscaleBinary(config.tailscaleBinary);
-  return detectTailscaleIp(binary);
+  const publicHost = await detectTailscaleIp(binary);
+  return {
+    bindHost: "0.0.0.0",
+    publicHost
+  };
 }
 
 async function stopPreview(): Promise<void> {

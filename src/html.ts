@@ -4,6 +4,7 @@ export interface PreviewPageInput {
   readonly selectedFile: string;
   readonly renderedMarkdown: string;
   readonly markdownFiles: readonly string[];
+  readonly openedFiles: readonly string[];
 }
 
 const highlightStyles = `
@@ -82,7 +83,16 @@ a{color:var(--accent);text-decoration-thickness:0.08em;text-underline-offset:0.1
   padding:9px 10px;
   width:100%;
 }
-.files{display:grid;gap:2px;max-height:calc(100vh - 106px);overflow:auto;padding-right:4px}
+.section-title{
+  color:var(--muted);
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:0.08em;
+  margin:14px 0 7px;
+  text-transform:uppercase;
+}
+.open-files,.files{display:grid;gap:2px;padding-right:4px}
+.files{max-height:calc(100vh - 180px);overflow:auto}
 .files a{
   border-radius:6px;
   color:var(--text);
@@ -95,6 +105,42 @@ a{color:var(--accent);text-decoration-thickness:0.08em;text-underline-offset:0.1
 }
 .files a:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .files a.active{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--text)}
+.open-file{
+  align-items:center;
+  border-radius:6px;
+  display:grid;
+  gap:6px;
+  grid-template-columns:minmax(0,1fr) 28px;
+}
+.open-file a{
+  border-radius:6px;
+  color:var(--text);
+  font-size:13px;
+  line-height:1.35;
+  overflow:hidden;
+  padding:7px 8px;
+  text-decoration:none;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.open-file a:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.open-file a.active{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.close-file{
+  align-items:center;
+  background:transparent;
+  border:1px solid transparent;
+  border-radius:6px;
+  color:var(--muted);
+  cursor:pointer;
+  display:flex;
+  font:inherit;
+  height:28px;
+  justify-content:center;
+  line-height:1;
+  padding:0;
+  width:28px;
+}
+.close-file:hover{border-color:var(--line);color:var(--text)}
 .page{min-width:0;padding:28px clamp(18px,5vw,64px) 64px}
 .doc{margin:0 auto;max-width:920px}
 .path{
@@ -140,8 +186,9 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
 @media (max-width:760px){
   .shell{display:block}
   .sidebar{border-bottom:1px solid var(--line);border-right:0;min-height:auto;position:static}
-  .files{display:flex;gap:6px;max-height:none;overflow-x:auto;padding-bottom:2px}
+  .open-files,.files{display:flex;gap:6px;max-height:none;overflow-x:auto;padding-bottom:2px}
   .files a{border:1px solid var(--line);flex:0 0 auto;max-width:230px}
+  .open-file{border:1px solid var(--line);flex:0 0 auto;grid-template-columns:minmax(0,180px) 28px}
   .page{padding-top:18px}
   .markdown-body{border-left:0;border-radius:0;border-right:0;margin:0 -18px}
 }
@@ -162,6 +209,26 @@ if (search) {
   });
 }
 document.addEventListener("click", (event) => {
+  const closeButton = event.target.closest("[data-close-file]");
+  if (closeButton) {
+    event.preventDefault();
+    const file = closeButton.dataset.closeFile;
+    fetch("/api/open-files?file=" + encodeURIComponent(file), { method: "DELETE" })
+      .then((response) => response.json())
+      .then((result) => {
+        if (file === currentFile) {
+          if (result.nextFile) {
+            location.href = "/?file=" + encodeURIComponent(result.nextFile);
+          } else {
+            location.href = "/";
+          }
+          return;
+        }
+        location.reload();
+      })
+      .catch(() => location.reload());
+    return;
+  }
   const anchor = event.target.closest("a[href]");
   if (!anchor) return;
   const url = new URL(anchor.href, location.href);
@@ -191,6 +258,12 @@ export function buildPreviewPage(input: PreviewPageInput): string {
     ? input.selectedFile.slice(0, input.selectedFile.lastIndexOf("/"))
     : "";
   const baseHref = selectedDir.length > 0 ? `/raw/${encodePathSegments(selectedDir)}/` : "/raw/";
+  const openedLinks = input.openedFiles
+    .map((file) => {
+      const href = `/?file=${encodeURIComponent(file)}`;
+      return `<div class="open-file"><a href="${href}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a><button class="close-file" type="button" data-close-file="${escapeHtml(file)}" aria-label="Close ${escapeHtml(file)}">×</button></div>`;
+    })
+    .join("");
   const links = input.markdownFiles
     .map((file) => {
       const href = `/?file=${encodeURIComponent(file)}`;
@@ -210,7 +283,10 @@ export function buildPreviewPage(input: PreviewPageInput): string {
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><strong>Markdown Preview</strong><span>${input.markdownFiles.length} files</span></div>
+      <div class="brand"><strong>Markdown Preview</strong><span>${input.openedFiles.length} open</span></div>
+      <div class="section-title">Open previews</div>
+      <nav class="open-files" aria-label="Open previews">${openedLinks}</nav>
+      <div class="section-title">Workspace files</div>
       <input id="file-search" class="search" type="search" autocomplete="off" placeholder="Filter files">
       <nav class="files" aria-label="Markdown files">${links}</nav>
     </aside>
