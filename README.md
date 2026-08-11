@@ -9,8 +9,8 @@ This extension starts a small HTTP preview server from inside VS Code or Cursor.
 - Renders `.md` and `.markdown` files with tables, code blocks, links, images, and task lists.
 - Serves local images and media from the selected workspace root.
 - Auto-refreshes connected browsers when the Markdown file changes.
-- Can bind directly to the machine's Tailscale IPv4 address.
-- Can also run through `tailscale serve --bg` when you want a MagicDNS HTTPS URL.
+- Uses the machine's current Tailscale IPv4 address when the preview starts.
+- Can try `tailscale serve --bg` for a MagicDNS HTTPS URL, then falls back to the direct Tailscale IP if Serve is disabled.
 
 ## Install from source
 
@@ -44,9 +44,11 @@ http://100.x.y.z:8787/?file=README.md
 
 Open that URL on Android while the Android device is signed into the same tailnet.
 
+If the Tailscale address changes later, run the start command again. The extension asks `tailscale ip -4` each time it starts, so it does not reuse an old `100.x.y.z` address.
+
 ## Tailscale Serve mode
 
-Run this command when you want a MagicDNS HTTPS URL:
+Run this command when you want to try a MagicDNS HTTPS URL:
 
 ```text
 Tailnet Markdown Preview: Start with Tailscale Serve
@@ -58,13 +60,15 @@ This starts the local preview server on `127.0.0.1`, then runs:
 tailscale serve --bg 8787
 ```
 
-The resulting URL should look like:
+If Tailscale Serve is enabled on the tailnet, the resulting URL should look like:
 
 ```text
 https://your-machine.your-tailnet.ts.net/?file=README.md
 ```
 
-Note: this updates the Tailscale Serve config for the selected port. If another service is already using that Serve route, choose a different port first.
+If Tailscale Serve is not enabled, the extension falls back to the direct current Tailscale IP URL, for example `http://100.x.y.z:8787/?file=README.md`.
+
+Note: when Serve succeeds, it updates the Tailscale Serve config for the selected port. If another service is already using that Serve route, choose a different port first.
 
 ## Settings
 

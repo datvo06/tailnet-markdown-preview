@@ -47,7 +47,7 @@ export async function detectTailscaleDnsName(binary: string): Promise<string | u
 }
 
 export async function startTailscaleServe(binary: string, port: number): Promise<void> {
-  await runTailscale(binary, ["serve", "--bg", String(port)], 10000);
+  await runTailscale(binary, ["serve", "--bg", String(port)], 5000);
 }
 
 export function parseDnsNameFromStatusJson(raw: string): string | undefined {
@@ -91,7 +91,8 @@ function runTailscale(binary: string, args: readonly string[], timeoutMs: number
       },
       (error, stdout, stderr) => {
         if (error !== null) {
-          const detail = stderr.trim().length > 0 ? stderr.trim() : error.message;
+          const output = [stdout.trim(), stderr.trim()].filter((part) => part.length > 0).join("\n");
+          const detail = output.length > 0 ? output : error.message;
           reject(new Error(detail));
           return;
         }

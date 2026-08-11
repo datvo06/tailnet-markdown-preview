@@ -14,6 +14,10 @@ import type { PreviewConfig, PreviewServerInfo, PreviewTarget } from "./types";
 
 const server = new PreviewServer();
 
+interface StartPreviewOptions {
+  readonly offerActions: boolean;
+}
+
 let output: vscode.OutputChannel;
 let statusBar: vscode.StatusBarItem;
 
@@ -74,9 +78,20 @@ async function pickFileAndStartViaServe(): Promise<void> {
   }
 
   const config = readPreviewConfig();
-  const info = await startPreview(target, { ...config, hostMode: "localhost" });
+  const info = await startPreview(target, { ...config, hostMode: "localhost" }, { offerActions: false });
   const binary = await findTailscaleBinary(config.tailscaleBinary);
-  await startTailscaleServe(binary, config.port);
+  try {
+    await startTailscaleServe(binary, config.port);
+  } catch (error: unknown) {
+    output.appendLine(`Tailscale Serve failed. Falling back to direct Tailscale IP.`);
+    output.appendLine(errorToMessage(error));
+    await vscode.window.showWarningMessage(
+      "Tailscale Serve is not available. Falling back to this machine's current Tailscale IP."
+    );
+    await startPreview(target, { ...config, hostMode: "tailnet" });
+    return;
+  }
+
   const dnsName = await detectTailscaleDnsName(binary);
 
   if (dnsName === undefined) {
@@ -92,7 +107,11 @@ async function pickFileAndStartViaServe(): Promise<void> {
   await offerUrlActions(serveUrl);
 }
 
-async function startPreview(target: PreviewTarget, config: PreviewConfig): Promise<PreviewServerInfo> {
+async function startPreview(
+  target: PreviewTarget,
+  config: PreviewConfig,
+  options: StartPreviewOptions = { offerActions: true }
+): Promise<PreviewServerInfo> {
   const host = await resolveHost(config);
   const info = await server.start({
     root: target.root,
@@ -107,11 +126,13 @@ async function startPreview(target: PreviewTarget, config: PreviewConfig): Promi
   output.appendLine(`URL: ${info.url}`);
   updateStatus(info);
 
-  if (config.autoOpenLocalBrowser) {
+  if (options.offerActions && config.autoOpenLocalBrowser) {
     await vscode.env.openExternal(vscode.Uri.parse(info.url));
   }
 
-  await offerUrlActions(info.url);
+  if (options.offerActions) {
+    await offerUrlActions(info.url);
+  }
   return info;
 }
 
@@ -179,6 +200,10 @@ function updateStatus(info: PreviewServerInfo | undefined): void {
   statusBar.text = "$(eye) Markdown preview";
   statusBar.tooltip = currentPublicUrl() ?? info.url;
   statusBar.show();
+}
+
+function errorToMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error.";
 }
 
 async function pickMarkdownTarget(): Promise<PreviewTarget | undefined> {

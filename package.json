@@ -2,7 +2,7 @@
   "name": "tailnet-markdown-preview",
   "displayName": "Tailnet Markdown Preview",
   "description": "Serve the current Markdown file as a browser preview that Android devices can open over Tailscale.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "datnguyen",
   "license": "MIT",
   "repository": {
