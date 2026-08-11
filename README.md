@@ -10,6 +10,7 @@ This extension starts a small HTTP preview server from inside VS Code or Cursor.
 - Serves local images and media from the selected workspace root.
 - Auto-refreshes connected browsers when the Markdown file changes.
 - Uses the machine's current Tailscale IPv4 address when the preview starts.
+- Falls back to the next available port when the configured port is already in use.
 - Keeps a browser-side list of opened previews and lets you close entries from that list.
 - Lets the browser submit highlighted-text edit requests for a Markdown file.
 - Can route browser edit requests through Codex CLI, Claude Code, or a queue-only mode.
@@ -48,6 +49,8 @@ http://100.x.y.z:8787/?file=README.md
 Open that URL on Android while the Android device is signed into the same tailnet.
 
 If the Tailscale address changes later, run the start command again. The extension asks `tailscale ip -4` each time it starts, so it does not reuse an old `100.x.y.z` address.
+
+If the configured port is already in use, the extension tries the next ports and copies the URL with the actual port. This is useful when both VS Code and Cursor have preview servers running, or when an older extension host still owns `8787`.
 
 Starting another Markdown file in the same workspace adds it to the "Open previews" list instead of replacing the running server. The browser UI can close files from that list. Closing a file removes it from the preview list; it does not close the editor tab in VS Code or Cursor.
 

@@ -41,6 +41,29 @@ describe("PreviewServer", () => {
     expect(await response.text()).toContain("Open previews");
   });
 
+  it("falls back when the preferred port is already in use", async () => {
+    const occupied = await listenOnFreePort();
+    try {
+      const info = await previewServer.start({
+        root,
+        file: "a.md",
+        bindHost: "127.0.0.1",
+        publicHost: "100.64.0.1",
+        port: occupied.port,
+        allowHtml: false,
+        editRunner: undefined
+      });
+
+      expect(info.port).not.toBe(occupied.port);
+      expect(info.url).toBe(`http://100.64.0.1:${info.port}/?file=a.md&token=${info.editToken}`);
+
+      const response = await fetch(`http://127.0.0.1:${info.port}/?file=a.md&token=${info.editToken}`);
+      expect(response.status).toBe(200);
+    } finally {
+      await closeServer(occupied.server);
+    }
+  });
+
   it("tracks opened files and closes them through the HTTP API", async () => {
     const port = await getFreePort();
     const info = await previewServer.start({
@@ -113,18 +136,35 @@ describe("PreviewServer", () => {
 });
 
 async function getFreePort(): Promise<number> {
+  const occupied = await listenOnFreePort();
+  await closeServer(occupied.server);
+  return occupied.port;
+}
+
+function listenOnFreePort(): Promise<{ server: ReturnType<typeof createServer>; port: number }> {
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (typeof address === "object" && address !== null) {
-        const port = address.port;
-        server.close(() => resolve(port));
+        resolve({ server, port: address.port });
         return;
       }
       server.close(() => reject(new Error("Could not allocate a free port.")));
     });
     server.on("error", reject);
+  });
+}
+
+function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error !== undefined) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
   });
 }
 

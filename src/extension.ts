@@ -87,7 +87,7 @@ async function pickFileAndStartViaServe(): Promise<void> {
   const info = await startPreview(target, { ...config, hostMode: "localhost" }, { offerActions: false });
   const binary = await findTailscaleBinary(config.tailscaleBinary);
   try {
-    await startTailscaleServe(binary, config.port);
+    await startTailscaleServe(binary, info.port);
   } catch (error: unknown) {
     output.appendLine(`Tailscale Serve failed. Falling back to direct Tailscale IP.`);
     output.appendLine(errorToMessage(error));
@@ -132,6 +132,9 @@ async function startPreview(
   output.appendLine(`Serving ${target.label}`);
   output.appendLine(`Root: ${target.root}`);
   output.appendLine(`URL: ${info.url}`);
+  if (info.port !== config.port) {
+    output.appendLine(`Configured port ${config.port} was busy. Using ${info.port} instead.`);
+  }
   updateStatus(info);
 
   if (options.offerActions && config.autoOpenLocalBrowser) {

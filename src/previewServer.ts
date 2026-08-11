@@ -29,7 +29,8 @@ interface ServerState {
   readonly root: string;
   readonly bindHost: string;
   publicHost: string;
-  readonly port: number;
+  readonly preferredPort: number;
+  port: number;
   readonly allowHtml: boolean;
   readonly renderer: MarkdownRenderer;
   readonly editToken: string;
@@ -83,6 +84,7 @@ export class PreviewServer {
       root: options.root,
       bindHost: options.bindHost,
       publicHost: options.publicHost,
+      preferredPort: options.port,
       port: options.port,
       allowHtml: options.allowHtml,
       renderer,
@@ -94,17 +96,12 @@ export class PreviewServer {
       tailscaleServeUrl: undefined,
       openedFiles: new Set([file])
     };
-    const server = createServer((request, response) => {
-      void this.handleRequest(request, response, state);
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(options.port, options.bindHost, () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
+    const { server, port } = await createListeningServer(
+      state,
+      options.port,
+      (request, response) => this.handleRequest(request, response, state)
+    );
+    state.port = port;
 
     this.active = { server, state };
     return buildInfo(state);
@@ -442,9 +439,64 @@ function canReuseServer(state: ServerState, options: PreviewServerOptions): bool
   return (
     state.root === options.root &&
     state.bindHost === options.bindHost &&
-    state.port === options.port &&
+    state.preferredPort === options.port &&
     state.allowHtml === options.allowHtml
   );
+}
+
+async function createListeningServer(
+  state: ServerState,
+  preferredPort: number,
+  handler: (request: IncomingMessage, response: ServerResponse) => Promise<void>
+): Promise<{ server: Server; port: number }> {
+  const candidates = candidatePorts(preferredPort);
+  let lastError: unknown;
+
+  for (const candidate of candidates) {
+    const server = createServer((request, response) => {
+      void handler(request, response);
+    });
+
+    try {
+      await listen(server, state.bindHost, candidate);
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : candidate;
+      return { server, port };
+    } catch (error: unknown) {
+      lastError = error;
+      server.close();
+      if (!hasCode(error, "EADDRINUSE")) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Could not bind preview server.");
+}
+
+function candidatePorts(preferredPort: number): number[] {
+  const ports: number[] = [];
+  for (let port = preferredPort; port <= Math.min(65535, preferredPort + 20); port += 1) {
+    ports.push(port);
+  }
+  ports.push(0);
+  return ports;
+}
+
+function listen(server: Server, host: string, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
 }
 
 function firstOpenedFile(state: ServerState): string {
