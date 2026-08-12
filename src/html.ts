@@ -187,6 +187,7 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
 .task-list-item input{margin:0 0.5em 0 -1.4em}
 .missing{background:#fee2e2;border:1px solid #b91c1c;border-radius:8px;color:#7f1d1d;padding:16px}
 .selection-tools{
+  align-items:center;
   background:var(--panel);
   border:1px solid var(--line);
   border-radius:6px;
@@ -198,6 +199,16 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
   z-index:20;
 }
 .selection-tools.visible{display:flex}
+.selection-summary{
+  color:var(--muted);
+  display:none;
+  flex:1;
+  font-size:12px;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
 .selection-tools button,.comment-panel button{
   background:var(--accent);
   border:0;
@@ -271,6 +282,21 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
   .open-file{border:1px solid var(--line);flex:0 0 auto;grid-template-columns:minmax(0,180px) 28px}
   .page{padding-top:18px}
   .markdown-body{border-left:0;border-radius:0;border-right:0;margin:0 -18px}
+  .selection-tools{
+    bottom:12px;
+    left:12px !important;
+    right:12px;
+    top:auto !important;
+  }
+  .selection-summary{display:block}
+  .selection-tools button{flex:0 0 auto}
+  .comment-panel{
+    bottom:12px;
+    left:12px;
+    max-width:none;
+    right:12px;
+    width:auto;
+  }
 }
 ${highlightStyles}`;
 
@@ -337,26 +363,48 @@ if (currentFile && window.EventSource) {
 let selectedText = "";
 const markdownBody = document.querySelector(".markdown-body");
 const selectionTools = document.querySelector("#selection-tools");
+const selectionSummary = document.querySelector("#selection-summary");
 const commentPanel = document.querySelector("#comment-panel");
 const selectedPreview = document.querySelector("#selected-preview");
 const commentText = document.querySelector("#comment-text");
 const editRequestList = document.querySelector("#edit-requests");
 
 if (canEdit && markdownBody && selectionTools && commentPanel) {
-  document.addEventListener("selectionchange", () => {
+  const scheduleSelectionCheck = (delay = 0) => {
+    window.setTimeout(updateSelectionTools, delay);
+  };
+
+  const updateSelectionTools = () => {
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
+    if (!selection || selection.rangeCount === 0) {
+      if (!commentPanel.classList.contains("visible")) selectionTools.classList.remove("visible");
+      return;
+    }
     const text = selection.toString().trim();
-    const anchor = selection.anchorNode;
-    if (!text || !anchor || !markdownBody.contains(anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : anchor)) {
-      selectionTools.classList.remove("visible");
+    const range = selection.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    if (!text || !(element instanceof Element) || !markdownBody.contains(element)) {
+      if (!commentPanel.classList.contains("visible")) selectionTools.classList.remove("visible");
       return;
     }
     selectedText = text.slice(0, 4000);
-    const rect = selection.getRangeAt(0).getBoundingClientRect();
-    selectionTools.style.left = Math.min(rect.left, window.innerWidth - 170) + "px";
+    if (selectionSummary) selectionSummary.textContent = selectedText;
+    const rect = firstUsefulSelectionRect(range);
+    selectionTools.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 170)) + "px";
     selectionTools.style.top = Math.max(8, rect.top - 46) + "px";
     selectionTools.classList.add("visible");
+  };
+
+  document.addEventListener("selectionchange", () => scheduleSelectionCheck(80));
+  document.addEventListener("mouseup", () => scheduleSelectionCheck(20));
+  document.addEventListener("keyup", () => scheduleSelectionCheck(20));
+  document.addEventListener("pointerup", () => scheduleSelectionCheck(120));
+  document.addEventListener("touchend", () => scheduleSelectionCheck(350), { passive: true });
+  document.addEventListener("scroll", () => scheduleSelectionCheck(80), { passive: true });
+
+  document.querySelector("#open-comment")?.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
   });
 
   document.querySelector("#open-comment")?.addEventListener("click", () => {
@@ -390,6 +438,14 @@ if (canEdit && markdownBody && selectionTools && commentPanel) {
   setInterval(() => {
     void refreshEditRequests();
   }, 2500);
+}
+
+function firstUsefulSelectionRect(range) {
+  const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
+  if (rects.length > 0) return rects[0];
+  const rect = range.getBoundingClientRect();
+  if (rect.width > 0 || rect.height > 0) return rect;
+  return { left: 12, top: window.innerHeight - 70 };
 }
 
 function refreshEditRequests() {
@@ -483,7 +539,7 @@ export function buildPreviewPage(input: PreviewPageInput): string {
       </article>
     </main>
   </div>
-  <div id="selection-tools" class="selection-tools"><button id="open-comment" type="button">Comment</button></div>
+  <div id="selection-tools" class="selection-tools"><span id="selection-summary" class="selection-summary"></span><button id="open-comment" type="button">Comment</button></div>
   <section id="comment-panel" class="comment-panel" aria-label="Markdown edit request">
     <label>Selected text</label>
     <div id="selected-preview" class="selected-preview"></div>

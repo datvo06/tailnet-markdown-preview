@@ -58,6 +58,8 @@ Starting another Markdown file in the same workspace adds it to the "Open previe
 
 Open the copied preview URL, select text in the rendered Markdown, then choose "Comment". The browser sends the selected rendered text plus your comment back to the local extension server.
 
+On Android, long-press and adjust the text selection handles. A bottom comment bar appears after the browser finalizes the selection.
+
 By default, edit requests use `auto` mode:
 
 1. Try Codex CLI through `codex exec`.
