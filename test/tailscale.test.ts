@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDnsNameFromDnsStatus, parseDnsNameFromStatusJson } from "../src/tailscale";
+import { buildTailscaleServeArgs, parseDnsNameFromDnsStatus, parseDnsNameFromStatusJson } from "../src/tailscale";
 
 describe("tailscale parsing", () => {
   it("reads DNSName from tailscale status json", () => {
@@ -22,5 +22,14 @@ describe("tailscale parsing", () => {
     const raw = "Other devices in your tailnet can reach this device at dats-macbook-pro.tail5600e5.ts.net.";
 
     expect(parseDnsNameFromDnsStatus(raw)).toBe("dats-macbook-pro.tail5600e5.ts.net");
+  });
+
+  it("builds a workspace-specific Serve command", () => {
+    expect(buildTailscaleServeArgs(8787, "md-work/")).toEqual([
+      "serve",
+      "--bg",
+      "--set-path=/md-work",
+      "8787"
+    ]);
   });
 });

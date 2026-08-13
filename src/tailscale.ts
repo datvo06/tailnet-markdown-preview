@@ -46,8 +46,12 @@ export async function detectTailscaleDnsName(binary: string): Promise<string | u
   return parseDnsNameFromDnsStatus(dnsStatus);
 }
 
-export async function startTailscaleServe(binary: string, port: number): Promise<void> {
-  await runTailscale(binary, ["serve", "--bg", String(port)], 5000);
+export async function startTailscaleServe(binary: string, port: number, servePath: string): Promise<void> {
+  await runTailscale(binary, buildTailscaleServeArgs(port, servePath), 5000);
+}
+
+export function buildTailscaleServeArgs(port: number, servePath: string): string[] {
+  return ["serve", "--bg", `--set-path=${normalizeServePath(servePath)}`, String(port)];
 }
 
 export function parseDnsNameFromStatusJson(raw: string): string | undefined {
@@ -100,6 +104,15 @@ function runTailscale(binary: string, args: readonly string[], timeoutMs: number
       }
     );
   });
+}
+
+function normalizeServePath(servePath: string): string {
+  const trimmed = servePath.trim();
+  if (trimmed.length === 0 || trimmed === "/") {
+    return "/";
+  }
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withSlash.replace(/\/+$/u, "");
 }
 
 function isObject(value: unknown): value is { readonly [key: string]: unknown } {

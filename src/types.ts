@@ -25,6 +25,7 @@ export interface PreviewServerOptions {
   readonly file: string;
   readonly bindHost: string;
   readonly publicHost: string;
+  readonly publicBasePath: string;
   readonly port: number;
   readonly allowHtml: boolean;
   readonly editRunner: EditRunner | undefined;
@@ -35,6 +36,7 @@ export interface PreviewServerInfo {
   readonly file: string;
   readonly bindHost: string;
   readonly publicHost: string;
+  readonly publicBasePath: string;
   readonly port: number;
   readonly url: string;
   readonly tailscaleServeUrl: string | undefined;

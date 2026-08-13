@@ -9,7 +9,11 @@ describe("html", () => {
 
   it("sets a base href from the selected markdown file directory", () => {
     const page = buildPreviewPage({
+      root: "/tmp/work",
+      workspaceName: "work",
       selectedFile: "docs/guide.md",
+      currentDir: "docs",
+      publicBasePath: "",
       renderedMarkdown: "<h1>Guide</h1>",
       markdownFiles: ["README.md", "docs/guide.md"],
       openedFiles: ["docs/guide.md"],
@@ -19,11 +23,17 @@ describe("html", () => {
 
     expect(page).toContain('<base href="/raw/docs/">');
     expect(page).toContain("docs/guide.md");
+    expect(page).toContain("/tmp/work");
+    expect(page).toContain("Folders");
   });
 
   it("renders opened files with close controls", () => {
     const page = buildPreviewPage({
+      root: "/tmp/work",
+      workspaceName: "work",
       selectedFile: "README.md",
+      currentDir: "",
+      publicBasePath: "/md-work",
       renderedMarkdown: "<h1>Readme</h1>",
       markdownFiles: ["README.md"],
       openedFiles: ["README.md"],
@@ -33,11 +43,17 @@ describe("html", () => {
 
     expect(page).toContain("Open previews");
     expect(page).toContain('data-close-file="README.md"');
+    expect(page).toContain('data-base-path="/md-work"');
+    expect(page).toContain('href="/md-work/?file=README.md&amp;token=token"');
   });
 
   it("renders browser edit controls only when an edit token is present", () => {
     const page = buildPreviewPage({
+      root: "/tmp/work",
+      workspaceName: "work",
       selectedFile: "README.md",
+      currentDir: "",
+      publicBasePath: "",
       renderedMarkdown: "<h1>Readme</h1>",
       markdownFiles: ["README.md"],
       openedFiles: ["README.md"],

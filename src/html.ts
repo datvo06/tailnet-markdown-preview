@@ -2,7 +2,11 @@ import { encodePathSegments } from "./paths";
 import type { EditRequestRecord } from "./types";
 
 export interface PreviewPageInput {
+  readonly root: string;
+  readonly workspaceName: string;
   readonly selectedFile: string;
+  readonly currentDir: string;
+  readonly publicBasePath: string;
   readonly renderedMarkdown: string;
   readonly markdownFiles: readonly string[];
   readonly openedFiles: readonly string[];
@@ -75,6 +79,28 @@ a{color:var(--accent);text-decoration-thickness:0.08em;text-underline-offset:0.1
 .brand{align-items:baseline;display:flex;gap:12px;justify-content:space-between;margin-bottom:14px}
 .brand strong{font-size:15px}
 .brand span{color:var(--muted);font-size:12px}
+.workspace-meta{
+  background:var(--bg);
+  border:1px solid var(--line);
+  border-radius:8px;
+  margin-bottom:12px;
+  padding:10px;
+}
+.workspace-name{
+  font-size:14px;
+  font-weight:700;
+  line-height:1.25;
+  margin-bottom:6px;
+  overflow-wrap:anywhere;
+}
+.root-path,.current-dir{
+  color:var(--muted);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:11px;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+.current-dir{margin-top:6px}
 .search{
   background:var(--bg);
   border:1px solid var(--line);
@@ -94,9 +120,10 @@ a{color:var(--accent);text-decoration-thickness:0.08em;text-underline-offset:0.1
   margin:14px 0 7px;
   text-transform:uppercase;
 }
-.open-files,.files{display:grid;gap:2px;padding-right:4px}
+.open-files,.files,.directories{display:grid;gap:2px;padding-right:4px}
 .files{max-height:calc(100vh - 180px);overflow:auto}
-.files a{
+.directories{max-height:132px;overflow:auto}
+.files a,.directories a{
   border-radius:6px;
   color:var(--text);
   display:block;
@@ -106,8 +133,8 @@ a{color:var(--accent);text-decoration-thickness:0.08em;text-underline-offset:0.1
   padding:7px 8px;
   text-decoration:none;
 }
-.files a:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
-.files a.active{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--text)}
+.files a:hover,.directories a:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.files a.active,.directories a.active{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--text)}
 .open-file{
   align-items:center;
   border-radius:6px;
@@ -146,13 +173,34 @@ a{color:var(--accent);text-decoration-thickness:0.08em;text-underline-offset:0.1
 .close-file:hover{border-color:var(--line);color:var(--text)}
 .page{min-width:0;padding:28px clamp(18px,5vw,64px) 64px}
 .doc{margin:0 auto;max-width:920px}
-.path{
+.location{
+  border-bottom:1px solid var(--line);
+  margin-bottom:18px;
+  padding-bottom:12px;
+}
+.location-title{
+  font-size:13px;
+  font-weight:700;
+  margin-bottom:5px;
+  overflow-wrap:anywhere;
+}
+.breadcrumbs{
+  align-items:center;
+  display:flex;
+  flex-wrap:wrap;
+  font-size:12px;
+  gap:5px;
+  margin-bottom:8px;
+}
+.breadcrumbs a,.breadcrumbs span{overflow-wrap:anywhere}
+.breadcrumb-separator{color:var(--muted)}
+.path,.root-display{
   color:var(--muted);
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:12px;
-  margin-bottom:18px;
   overflow-wrap:anywhere;
 }
+.root-display{font-size:11px;margin-top:5px}
 .markdown-body{
   background:var(--panel);
   border:1px solid var(--line);
@@ -277,8 +325,8 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
 @media (max-width:760px){
   .shell{display:block}
   .sidebar{border-bottom:1px solid var(--line);border-right:0;min-height:auto;position:static}
-  .open-files,.files{display:flex;gap:6px;max-height:none;overflow-x:auto;padding-bottom:2px}
-  .files a{border:1px solid var(--line);flex:0 0 auto;max-width:230px}
+  .open-files,.files,.directories{display:flex;gap:6px;max-height:none;overflow-x:auto;padding-bottom:2px}
+  .files a,.directories a{border:1px solid var(--line);flex:0 0 auto;max-width:230px}
   .open-file{border:1px solid var(--line);flex:0 0 auto;grid-template-columns:minmax(0,180px) 28px}
   .page{padding-top:18px}
   .markdown-body{border-left:0;border-radius:0;border-right:0;margin:0 -18px}
@@ -302,14 +350,24 @@ ${highlightStyles}`;
 
 const clientScript = `
 const params = new URLSearchParams(location.search);
-const currentFile = params.get("file") || "";
+const basePath = document.body.dataset.basePath || "";
+const currentFile = params.get("file") || document.body.dataset.currentFile || "";
 const editToken = params.get("token") || window.localStorage.getItem("tailnetMarkdownPreview.editToken") || "";
 if (editToken) window.localStorage.setItem("tailnetMarkdownPreview.editToken", editToken);
 const canEdit = document.body.dataset.canEdit === "true" && Boolean(editToken);
+const withBasePath = (url) => {
+  if (!basePath || !url.startsWith("/")) return url;
+  return url === "/" ? basePath + "/" : basePath + url;
+};
+const stripBasePath = (pathname) => {
+  if (!basePath) return pathname;
+  if (pathname === basePath) return "/";
+  if (pathname.startsWith(basePath + "/")) return pathname.slice(basePath.length);
+  return pathname;
+};
 const withToken = (url) => {
-  if (!editToken) return url;
-  const next = new URL(url, location.href);
-  next.searchParams.set("token", editToken);
+  const next = new URL(withBasePath(url), location.href);
+  if (editToken) next.searchParams.set("token", editToken);
   return next.pathname + next.search + next.hash;
 };
 document.querySelectorAll("[data-file]").forEach((link) => {
@@ -334,9 +392,9 @@ document.addEventListener("click", (event) => {
       .then((result) => {
         if (file === currentFile) {
           if (result.nextFile) {
-            location.href = "/?file=" + encodeURIComponent(result.nextFile);
+            location.href = withToken("/?file=" + encodeURIComponent(result.nextFile));
           } else {
-            location.href = "/";
+            location.href = withToken("/");
           }
           return;
         }
@@ -349,14 +407,15 @@ document.addEventListener("click", (event) => {
   if (!anchor) return;
   const url = new URL(anchor.href, location.href);
   if (url.origin !== location.origin) return;
-  if (url.pathname.startsWith("/raw/") && url.pathname.toLowerCase().endsWith(".md")) {
+  const routePath = stripBasePath(url.pathname);
+  if (routePath.startsWith("/raw/") && routePath.toLowerCase().endsWith(".md")) {
     event.preventDefault();
-    const file = decodeURIComponent(url.pathname.slice("/raw/".length));
+    const file = decodeURIComponent(routePath.slice("/raw/".length));
     location.href = withToken("/?file=" + encodeURIComponent(file));
   }
 });
 if (currentFile && window.EventSource) {
-  const events = new EventSource("/events?file=" + encodeURIComponent(currentFile));
+  const events = new EventSource(withBasePath("/events?file=" + encodeURIComponent(currentFile)));
   events.addEventListener("reload", () => location.reload());
 }
 
@@ -487,21 +546,36 @@ export function escapeHtml(value: string): string {
 }
 
 export function buildPreviewPage(input: PreviewPageInput): string {
+  const basePath = normalizeBasePath(input.publicBasePath);
   const tokenQuery = input.editToken === undefined ? "" : `&token=${encodeURIComponent(input.editToken)}`;
   const selectedDir = input.selectedFile.includes("/")
     ? input.selectedFile.slice(0, input.selectedFile.lastIndexOf("/"))
     : "";
-  const baseHref = selectedDir.length > 0 ? `/raw/${encodePathSegments(selectedDir)}/` : "/raw/";
+  const currentDir = input.currentDir || selectedDir;
+  const baseHref = joinBasePath(
+    basePath,
+    selectedDir.length > 0 ? `/raw/${encodePathSegments(selectedDir)}/` : "/raw/"
+  );
+  const firstFilesByDirectory = mapFirstFilesByDirectory(input.markdownFiles, input.selectedFile);
+  const directoryLinks = [...firstFilesByDirectory.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([directory, file]) => {
+      const label = directory.length === 0 ? "./" : `${directory}/`;
+      const activeClass = directory === currentDir ? ' class="active"' : "";
+      return `<a href="${escapeHtml(pageHref(basePath, file, tokenQuery))}" data-directory="${escapeHtml(directory)}"${activeClass}>${escapeHtml(label)}</a>`;
+    })
+    .join("");
+  const breadcrumbs = buildBreadcrumbs(input.selectedFile, firstFilesByDirectory, basePath, tokenQuery);
   const openedLinks = input.openedFiles
     .map((file) => {
-      const href = `/?file=${encodeURIComponent(file)}${tokenQuery}`;
-      return `<div class="open-file"><a href="${href}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a><button class="close-file" type="button" data-close-file="${escapeHtml(file)}" aria-label="Close ${escapeHtml(file)}">x</button></div>`;
+      const href = pageHref(basePath, file, tokenQuery);
+      return `<div class="open-file"><a href="${escapeHtml(href)}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a><button class="close-file" type="button" data-close-file="${escapeHtml(file)}" aria-label="Close ${escapeHtml(file)}">x</button></div>`;
     })
     .join("");
   const links = input.markdownFiles
     .map((file) => {
-      const href = `/?file=${encodeURIComponent(file)}${tokenQuery}`;
-      return `<a href="${href}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a>`;
+      const href = pageHref(basePath, file, tokenQuery);
+      return `<a href="${escapeHtml(href)}" data-file="${escapeHtml(file)}">${escapeHtml(file)}</a>`;
     })
     .join("");
   const editRequests = input.editRequests
@@ -516,16 +590,23 @@ export function buildPreviewPage(input: PreviewPageInput): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <base href="${baseHref}">
+  <base href="${escapeHtml(baseHref)}">
   <title>${escapeHtml(input.selectedFile)} - Markdown Preview</title>
   <style>${styles}</style>
 </head>
-<body data-can-edit="${input.editToken === undefined ? "false" : "true"}">
+<body data-can-edit="${input.editToken === undefined ? "false" : "true"}" data-base-path="${escapeHtml(basePath)}" data-current-file="${escapeHtml(input.selectedFile)}">
   <div class="shell">
     <aside class="sidebar">
       <div class="brand"><strong>Markdown Preview</strong><span>${input.openedFiles.length} open</span></div>
+      <div class="workspace-meta">
+        <div class="workspace-name">${escapeHtml(input.workspaceName)}</div>
+        <div class="root-path">${escapeHtml(input.root)}</div>
+        <div class="current-dir">${escapeHtml(currentDir.length === 0 ? "." : currentDir)}</div>
+      </div>
       <div class="section-title">Open previews</div>
       <nav class="open-files" aria-label="Open previews">${openedLinks}</nav>
+      <div class="section-title">Folders</div>
+      <nav class="directories" aria-label="Workspace folders">${directoryLinks}</nav>
       <div class="section-title">Workspace files</div>
       <input id="file-search" class="search" type="search" autocomplete="off" placeholder="Filter files">
       <nav class="files" aria-label="Markdown files">${links}</nav>
@@ -534,7 +615,12 @@ export function buildPreviewPage(input: PreviewPageInput): string {
     </aside>
     <main class="page">
       <article class="doc">
-        <div class="path">${escapeHtml(input.selectedFile)}</div>
+        <div class="location">
+          <div class="location-title">${escapeHtml(input.workspaceName)}</div>
+          <nav class="breadcrumbs" aria-label="Current file path">${breadcrumbs}</nav>
+          <div class="path">${escapeHtml(input.selectedFile)}</div>
+          <div class="root-display">${escapeHtml(input.root)}</div>
+        </div>
         <div class="markdown-body">${input.renderedMarkdown}</div>
       </article>
     </main>
@@ -553,4 +639,63 @@ export function buildPreviewPage(input: PreviewPageInput): string {
   <script>${clientScript}</script>
 </body>
 </html>`;
+}
+
+function normalizeBasePath(basePath: string): string {
+  const trimmed = basePath.trim();
+  if (trimmed.length === 0 || trimmed === "/") {
+    return "";
+  }
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withSlash.replace(/\/+$/u, "");
+}
+
+function joinBasePath(basePath: string, routePath: string): string {
+  return `${basePath}${routePath}`;
+}
+
+function pageHref(basePath: string, file: string, tokenQuery: string): string {
+  return `${basePath}/?file=${encodeURIComponent(file)}${tokenQuery}`;
+}
+
+function mapFirstFilesByDirectory(files: readonly string[], fallbackFile: string): Map<string, string> {
+  const firstFilesByDirectory = new Map<string, string>();
+  for (const file of files) {
+    const directory = directoryOf(file);
+    const parts = directory.length === 0 ? [] : directory.split("/");
+    for (let index = 0; index <= parts.length; index += 1) {
+      const ancestor = parts.slice(0, index).join("/");
+      if (!firstFilesByDirectory.has(ancestor)) {
+        firstFilesByDirectory.set(ancestor, file);
+      }
+    }
+  }
+  if (!firstFilesByDirectory.has("")) {
+    firstFilesByDirectory.set("", fallbackFile);
+  }
+  return firstFilesByDirectory;
+}
+
+function buildBreadcrumbs(
+  selectedFile: string,
+  firstFilesByDirectory: ReadonlyMap<string, string>,
+  basePath: string,
+  tokenQuery: string
+): string {
+  const parts = selectedFile.split("/");
+  const links: string[] = [];
+  const rootFile = firstFilesByDirectory.get("") ?? selectedFile;
+  links.push(`<a href="${escapeHtml(pageHref(basePath, rootFile, tokenQuery))}">.</a>`);
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const directory = parts.slice(0, index + 1).join("/");
+    const file = firstFilesByDirectory.get(directory) ?? selectedFile;
+    links.push(`<a href="${escapeHtml(pageHref(basePath, file, tokenQuery))}">${escapeHtml(parts[index] ?? "")}</a>`);
+  }
+  links.push(`<span>${escapeHtml(parts.at(-1) ?? selectedFile)}</span>`);
+  return links.join('<span class="breadcrumb-separator">/</span>');
+}
+
+function directoryOf(file: string): string {
+  const index = file.lastIndexOf("/");
+  return index === -1 ? "" : file.slice(0, index);
 }

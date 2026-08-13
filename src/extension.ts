@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import * as path from "path";
 import * as vscode from "vscode";
 
@@ -22,6 +23,7 @@ interface ResolvedPreviewHost {
 
 interface StartPreviewOptions {
   readonly offerActions: boolean;
+  readonly publicBasePath?: string;
 }
 
 let output: vscode.OutputChannel;
@@ -75,7 +77,7 @@ async function pickFileAndStartViaServe(): Promise<void> {
   }
 
   const choice = await vscode.window.showWarningMessage(
-    "This runs `tailscale serve --bg` and updates this machine's Tailscale Serve config for the selected port.",
+    "This runs `tailscale serve --bg --set-path` and updates this machine's Tailscale Serve config for a workspace-specific path.",
     { modal: true },
     "Continue"
   );
@@ -84,10 +86,14 @@ async function pickFileAndStartViaServe(): Promise<void> {
   }
 
   const config = readPreviewConfig();
-  const info = await startPreview(target, { ...config, hostMode: "localhost" }, { offerActions: false });
+  const servePath = buildServePath(target.root);
+  const info = await startPreview(target, { ...config, hostMode: "localhost" }, {
+    offerActions: false,
+    publicBasePath: servePath
+  });
   const binary = await findTailscaleBinary(config.tailscaleBinary);
   try {
-    await startTailscaleServe(binary, info.port);
+    await startTailscaleServe(binary, info.port, servePath);
   } catch (error: unknown) {
     output.appendLine(`Tailscale Serve failed. Falling back to direct Tailscale IP.`);
     output.appendLine(errorToMessage(error));
@@ -107,7 +113,9 @@ async function pickFileAndStartViaServe(): Promise<void> {
     return;
   }
 
-  const serveUrl = buildPreviewUrl(dnsName, 443, info.file, info.editToken).replace(/^http:/, "https:").replace(":443/", "/");
+  const serveUrl = buildPreviewUrl(dnsName, 443, info.file, info.editToken, servePath)
+    .replace(/^http:/, "https:")
+    .replace(":443/", "/");
   const updated = server.setTailscaleServeUrl(serveUrl);
   updateStatus(updated);
   await offerUrlActions(serveUrl);
@@ -124,6 +132,7 @@ async function startPreview(
     file: target.file,
     bindHost: host.bindHost,
     publicHost: host.publicHost,
+    publicBasePath: options.publicBasePath ?? "",
     port: config.port,
     allowHtml: config.allowHtml,
     editRunner: createEditRunner(config)
@@ -222,6 +231,18 @@ function updateStatus(info: PreviewServerInfo | undefined): void {
 
 function errorToMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error.";
+}
+
+function buildServePath(root: string): string {
+  const name =
+    path
+      .basename(path.resolve(root))
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 32) || "workspace";
+  const hash = createHash("sha1").update(path.resolve(root)).digest("hex").slice(0, 8);
+  return `/md-${name}-${hash}`;
 }
 
 async function pickMarkdownTarget(): Promise<PreviewTarget | undefined> {

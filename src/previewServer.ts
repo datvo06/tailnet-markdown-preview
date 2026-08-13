@@ -29,6 +29,7 @@ interface ServerState {
   readonly root: string;
   readonly bindHost: string;
   publicHost: string;
+  publicBasePath: string;
   readonly preferredPort: number;
   port: number;
   readonly allowHtml: boolean;
@@ -68,8 +69,10 @@ export class PreviewServer {
 
   public async start(options: PreviewServerOptions): Promise<PreviewServerInfo> {
     const file = normalizeRelativePath(options.file);
+    const publicBasePath = normalizeBasePath(options.publicBasePath);
     if (this.active !== undefined && canReuseServer(this.active.state, options)) {
       this.active.state.publicHost = options.publicHost;
+      this.active.state.publicBasePath = publicBasePath;
       this.active.state.editRunner = options.editRunner;
       this.active.state.tailscaleServeUrl = undefined;
       this.active.state.selectedFile = file;
@@ -84,6 +87,7 @@ export class PreviewServer {
       root: options.root,
       bindHost: options.bindHost,
       publicHost: options.publicHost,
+      publicBasePath,
       preferredPort: options.port,
       port: options.port,
       allowHtml: options.allowHtml,
@@ -150,7 +154,14 @@ export class PreviewServer {
         return;
       }
 
-      if (url.pathname === "/api/edit-requests" && request.method === "GET") {
+      const routePath = stripBasePath(url.pathname, state.publicBasePath) ?? url.pathname;
+
+      if (routePath === "/health") {
+        sendText(response, 200, "ok\n", "text/plain; charset=utf-8");
+        return;
+      }
+
+      if (routePath === "/api/edit-requests" && request.method === "GET") {
         if (!isAuthorized(url, state)) {
           sendJson(response, 403, { error: "Invalid preview token." });
           return;
@@ -159,7 +170,7 @@ export class PreviewServer {
         return;
       }
 
-      if (url.pathname === "/api/edit-requests" && request.method === "POST") {
+      if (routePath === "/api/edit-requests" && request.method === "POST") {
         const body = await readJsonBody(request);
         if (!isAuthorized(url, state, body)) {
           sendJson(response, 403, { error: "Invalid preview token." });
@@ -169,7 +180,7 @@ export class PreviewServer {
         return;
       }
 
-      if (url.pathname === "/api/open-files" && request.method === "DELETE") {
+      if (routePath === "/api/open-files" && request.method === "DELETE") {
         if (!isAuthorized(url, state)) {
           sendJson(response, 403, { error: "Invalid preview token." });
           return;
@@ -178,17 +189,17 @@ export class PreviewServer {
         return;
       }
 
-      if (url.pathname === "/events") {
+      if (routePath === "/events") {
         await this.streamEvents(request, response, state.root, url.searchParams.get("file") ?? state.selectedFile);
         return;
       }
 
-      if (url.pathname.startsWith("/raw/")) {
-        await this.serveRaw(response, state.root, url.pathname.slice("/raw/".length));
+      if (routePath.startsWith("/raw/")) {
+        await this.serveRaw(response, state.root, routePath.slice("/raw/".length));
         return;
       }
 
-      if (url.pathname === "/") {
+      if (routePath === "/") {
         await this.servePage(
           response,
           state,
@@ -237,7 +248,11 @@ export class PreviewServer {
       response,
       200,
       buildPreviewPage({
+        root: state.root,
+        workspaceName: path.basename(state.root) || state.root,
         selectedFile,
+        currentDir: currentDirectory(selectedFile),
+        publicBasePath: state.publicBasePath,
         renderedMarkdown,
         markdownFiles,
         openedFiles: [...state.openedFiles],
@@ -415,10 +430,17 @@ export class PreviewServer {
   }
 }
 
-export function buildPreviewUrl(host: string, port: number, file: string, token?: string): string {
+export function buildPreviewUrl(
+  host: string,
+  port: number,
+  file: string,
+  token?: string,
+  publicBasePath = ""
+): string {
   const urlHost = host.includes(":") ? `[${host}]` : host;
+  const basePath = normalizeBasePath(publicBasePath);
   const tokenPart = token === undefined ? "" : `&token=${encodeURIComponent(token)}`;
-  return `http://${urlHost}:${port}/?file=${encodeURIComponent(file)}${tokenPart}`;
+  return `http://${urlHost}:${port}${basePath}/?file=${encodeURIComponent(file)}${tokenPart}`;
 }
 
 function buildInfo(state: ServerState): PreviewServerInfo {
@@ -427,8 +449,9 @@ function buildInfo(state: ServerState): PreviewServerInfo {
     file: state.selectedFile,
     bindHost: state.bindHost,
     publicHost: state.publicHost,
+    publicBasePath: state.publicBasePath,
     port: state.port,
-    url: buildPreviewUrl(state.publicHost, state.port, state.selectedFile, state.editToken),
+    url: buildPreviewUrl(state.publicHost, state.port, state.selectedFile, state.editToken, state.publicBasePath),
     tailscaleServeUrl: state.tailscaleServeUrl,
     openedFiles: [...state.openedFiles],
     editToken: state.editToken
@@ -442,6 +465,33 @@ function canReuseServer(state: ServerState, options: PreviewServerOptions): bool
     state.preferredPort === options.port &&
     state.allowHtml === options.allowHtml
   );
+}
+
+function normalizeBasePath(basePath: string): string {
+  const trimmed = basePath.trim();
+  if (trimmed.length === 0 || trimmed === "/") {
+    return "";
+  }
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withSlash.replace(/\/+$/u, "");
+}
+
+function stripBasePath(pathname: string, basePath: string): string | undefined {
+  if (basePath.length === 0) {
+    return pathname;
+  }
+  if (pathname === basePath) {
+    return "/";
+  }
+  if (pathname.startsWith(`${basePath}/`)) {
+    return pathname.slice(basePath.length);
+  }
+  return undefined;
+}
+
+function currentDirectory(file: string): string {
+  const directory = path.posix.dirname(file);
+  return directory === "." ? "" : directory;
 }
 
 async function createListeningServer(

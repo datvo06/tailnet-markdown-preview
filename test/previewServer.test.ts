@@ -4,7 +4,7 @@ import * as path from "path";
 import { createServer } from "net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { PreviewServer } from "../src/previewServer";
+import { buildPreviewUrl, PreviewServer } from "../src/previewServer";
 import type { BrowserEditRequest, EditRunResult } from "../src/types";
 
 describe("PreviewServer", () => {
@@ -30,6 +30,7 @@ describe("PreviewServer", () => {
       file: "a.md",
       bindHost: "127.0.0.1",
       publicHost: "100.64.0.1",
+      publicBasePath: "",
       port,
       allowHtml: false,
       editRunner: undefined
@@ -49,6 +50,7 @@ describe("PreviewServer", () => {
         file: "a.md",
         bindHost: "127.0.0.1",
         publicHost: "100.64.0.1",
+        publicBasePath: "",
         port: occupied.port,
         allowHtml: false,
         editRunner: undefined
@@ -71,6 +73,7 @@ describe("PreviewServer", () => {
       file: "a.md",
       bindHost: "127.0.0.1",
       publicHost: "100.64.0.1",
+      publicBasePath: "",
       port,
       allowHtml: false,
       editRunner: undefined
@@ -97,6 +100,7 @@ describe("PreviewServer", () => {
       file: "a.md",
       bindHost: "127.0.0.1",
       publicHost: "100.64.0.1",
+      publicBasePath: "",
       port,
       allowHtml: false,
       editRunner: (request): Promise<EditRunResult> => {
@@ -132,6 +136,39 @@ describe("PreviewServer", () => {
     expect(accepted.status).toBe(202);
     await waitFor(() => seenRequests.length === 1);
     expect(seenRequests[0]?.file).toBe("a.md");
+  });
+
+  it("serves pages and APIs under a configured public base path", async () => {
+    const port = await getFreePort();
+    const info = await previewServer.start({
+      root,
+      file: "a.md",
+      bindHost: "127.0.0.1",
+      publicHost: "100.64.0.1",
+      publicBasePath: "/md-workspace",
+      port,
+      allowHtml: false,
+      editRunner: undefined
+    });
+
+    expect(info.url).toBe(`http://100.64.0.1:${port}/md-workspace/?file=a.md&token=${info.editToken}`);
+    expect(info.publicBasePath).toBe("/md-workspace");
+    expect(buildPreviewUrl("device.tailnet.ts.net", 443, "a.md", "token", "/md-workspace")).toBe(
+      "http://device.tailnet.ts.net:443/md-workspace/?file=a.md&token=token"
+    );
+
+    const page = await fetch(`http://127.0.0.1:${port}/md-workspace/?file=a.md&token=${info.editToken}`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('data-base-path="/md-workspace"');
+
+    const strippedPage = await fetch(`http://127.0.0.1:${port}/?file=a.md&token=${info.editToken}`);
+    expect(strippedPage.status).toBe(200);
+
+    const api = await fetch(
+      `http://127.0.0.1:${port}/md-workspace/api/open-files?file=a.md&token=${info.editToken}`,
+      { method: "DELETE" }
+    );
+    expect(api.status).toBe(200);
   });
 });
 

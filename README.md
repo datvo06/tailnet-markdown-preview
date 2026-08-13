@@ -12,9 +12,10 @@ This extension starts a small HTTP preview server from inside VS Code or Cursor.
 - Uses the machine's current Tailscale IPv4 address when the preview starts.
 - Falls back to the next available port when the configured port is already in use.
 - Keeps a browser-side list of opened previews and lets you close entries from that list.
+- Shows the local workspace root, current directory, breadcrumbs, and folder navigation in the browser.
 - Lets the browser submit highlighted-text edit requests for a Markdown file.
 - Can route browser edit requests through Codex CLI, Claude Code, or a queue-only mode.
-- Can try `tailscale serve --bg` for a MagicDNS HTTPS URL, then falls back to the direct Tailscale IP if Serve is disabled.
+- Can try `tailscale serve --bg --set-path` for a MagicDNS HTTPS URL, then falls back to the direct Tailscale IP if Serve is disabled.
 
 ## Install from source
 
@@ -54,6 +55,8 @@ If the configured port is already in use, the extension tries the next ports and
 
 Starting another Markdown file in the same workspace adds it to the "Open previews" list instead of replacing the running server. The browser UI can close files from that list. Closing a file removes it from the preview list; it does not close the editor tab in VS Code or Cursor.
 
+The browser sidebar shows the workspace name, absolute local root, current directory, open previews, folder navigation, and all Markdown files. Folder links open the first Markdown file under that folder, which makes it easy to move around the repo from Android without guessing where the preview server was started.
+
 ## Browser edit requests
 
 Open the copied preview URL, select text in the rendered Markdown, then choose "Comment". The browser sends the selected rendered text plus your comment back to the local extension server.
@@ -81,18 +84,18 @@ Tailnet Markdown Preview: Start with Tailscale Serve
 This starts the local preview server on `127.0.0.1`, then runs:
 
 ```bash
-tailscale serve --bg 8787
+tailscale serve --bg --set-path=/md-workspace-hash 8787
 ```
 
 If Tailscale Serve is enabled on the tailnet, the resulting URL should look like:
 
 ```text
-https://your-machine.your-tailnet.ts.net/?file=README.md
+https://your-machine.your-tailnet.ts.net/md-workspace-hash/?file=README.md
 ```
 
 If Tailscale Serve is not enabled, the extension falls back to the direct current Tailscale IP URL, for example `http://100.x.y.z:8787/?file=README.md`.
 
-Note: when Serve succeeds, it updates the Tailscale Serve config for the selected port. If another service is already using that Serve route, choose a different port first.
+Tailscale Serve config is machine-level, so mounting every repo at `/` would make separate workspaces fight each other. This extension derives a stable `/md-...` path from the selected workspace root and mounts that path instead. Direct tailnet mode is still the most reliable way to run multiple repos at once because each server can use its own chosen port.
 
 ## Settings
 
