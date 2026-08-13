@@ -14,6 +14,7 @@ This extension starts a small HTTP preview server from inside VS Code or Cursor.
 - Keeps a browser-side list of opened previews and lets you close entries from that list.
 - Shows the local workspace root, current directory, breadcrumbs, and folder navigation in the browser.
 - Lets the browser submit highlighted-text edit requests for a Markdown file.
+- Shows edit request status with elapsed time while a request is queued, running, or finished.
 - Can route browser edit requests through Codex CLI, Claude Code, or a queue-only mode.
 - Can try `tailscale serve --bg --set-path` for a MagicDNS HTTPS URL, then falls back to the direct Tailscale IP if Serve is disabled.
 
@@ -61,7 +62,9 @@ The browser sidebar shows the workspace name, absolute local root, current direc
 
 Open the copied preview URL, select text in the rendered Markdown, then choose "Comment". The browser sends the selected rendered text plus your comment back to the local extension server.
 
-On Android, long-press and adjust the text selection handles. A bottom comment bar appears after the browser finalizes the selection.
+On Android, long-press and adjust the text selection handles. A compact comment action appears after the browser finalizes the selection. The comment editor opens as a phone-friendly bottom sheet; on larger screens it opens near the selected text.
+
+After submitting, watch the "Edit requests" list in the browser. It shows whether each request is queued, running, succeeded, or failed, plus elapsed time. There is no exact ETA because Codex and Claude runtime depends on the model, repo size, and edit request, but the elapsed timer tells you whether the request is still moving.
 
 By default, edit requests use `auto` mode:
 

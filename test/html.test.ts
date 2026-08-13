@@ -78,5 +78,8 @@ describe("html", () => {
     expect(page).toContain('data-can-edit="true"');
     expect(page).toContain("Edit requests");
     expect(page).toContain("queued - queue");
+    expect(page).toContain('data-created-at="2026-08-11T00:00:00.000Z"');
+    expect(page).toContain("request-time");
+    expect(page).toContain('id="request-status"');
   });
 });

@@ -267,17 +267,21 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
   font-size:13px;
   padding:7px 10px;
 }
+.selection-tools button:disabled,.comment-panel button:disabled{
+  cursor:default;
+  opacity:0.6;
+}
 .comment-panel{
   background:var(--panel);
   border:1px solid var(--line);
   border-radius:8px;
-  bottom:18px;
   box-shadow:var(--shadow);
   display:none;
   max-width:min(420px,calc(100vw - 36px));
+  max-height:calc(100vh - 24px);
+  overflow:auto;
   padding:14px;
   position:fixed;
-  right:18px;
   width:420px;
   z-index:30;
 }
@@ -313,6 +317,14 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
 }
 .comment-actions{display:flex;gap:8px;justify-content:flex-end}
 .comment-actions .secondary{background:transparent;border:1px solid var(--line);color:var(--text)}
+.request-status{
+  color:var(--muted);
+  font-size:12px;
+  margin-top:8px;
+  min-height:18px;
+}
+.request-status[data-state="failed"]{color:#b91c1c}
+.request-status[data-state="queued"],.request-status[data-state="running"]{color:var(--accent)}
 .edit-requests{display:grid;gap:6px;margin-top:12px}
 .edit-request{
   border:1px solid var(--line);
@@ -321,7 +333,15 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
   font-size:12px;
   padding:7px 8px;
 }
+.edit-request[data-status="running"]{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
 .edit-request strong{color:var(--text);display:block;font-size:12px;font-weight:700}
+.request-meta{align-items:center;display:flex;gap:8px;justify-content:space-between}
+.request-time{color:var(--accent);font-size:11px;white-space:nowrap}
+.request-file{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  overflow-wrap:anywhere;
+}
+.request-message{overflow-wrap:anywhere}
 @media (max-width:760px){
   .shell{display:block}
   .sidebar{border-bottom:1px solid var(--line);border-right:0;min-height:auto;position:static}
@@ -343,6 +363,7 @@ hr{border:0;border-top:1px solid var(--line);margin:1.5em 0}
     left:12px;
     max-width:none;
     right:12px;
+    top:auto !important;
     width:auto;
   }
 }
@@ -420,12 +441,15 @@ if (currentFile && window.EventSource) {
 }
 
 let selectedText = "";
+let selectionRect = null;
 const markdownBody = document.querySelector(".markdown-body");
 const selectionTools = document.querySelector("#selection-tools");
 const selectionSummary = document.querySelector("#selection-summary");
 const commentPanel = document.querySelector("#comment-panel");
 const selectedPreview = document.querySelector("#selected-preview");
 const commentText = document.querySelector("#comment-text");
+const submitComment = document.querySelector("#submit-comment");
+const requestStatus = document.querySelector("#request-status");
 const editRequestList = document.querySelector("#edit-requests");
 
 if (canEdit && markdownBody && selectionTools && commentPanel) {
@@ -450,6 +474,7 @@ if (canEdit && markdownBody && selectionTools && commentPanel) {
     selectedText = text.slice(0, 4000);
     if (selectionSummary) selectionSummary.textContent = selectedText;
     const rect = firstUsefulSelectionRect(range);
+    selectionRect = plainRect(rect);
     selectionTools.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 170)) + "px";
     selectionTools.style.top = Math.max(8, rect.top - 46) + "px";
     selectionTools.classList.add("visible");
@@ -461,6 +486,9 @@ if (canEdit && markdownBody && selectionTools && commentPanel) {
   document.addEventListener("pointerup", () => scheduleSelectionCheck(120));
   document.addEventListener("touchend", () => scheduleSelectionCheck(350), { passive: true });
   document.addEventListener("scroll", () => scheduleSelectionCheck(80), { passive: true });
+  window.addEventListener("resize", () => {
+    if (commentPanel.classList.contains("visible")) positionCommentPanel();
+  });
 
   document.querySelector("#open-comment")?.addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -469,7 +497,10 @@ if (canEdit && markdownBody && selectionTools && commentPanel) {
   document.querySelector("#open-comment")?.addEventListener("click", () => {
     selectedPreview.textContent = selectedText;
     commentText.value = "";
+    setRequestStatus("", "");
     commentPanel.classList.add("visible");
+    selectionTools.classList.remove("visible");
+    positionCommentPanel();
     commentText.focus();
   });
 
@@ -477,27 +508,45 @@ if (canEdit && markdownBody && selectionTools && commentPanel) {
     commentPanel.classList.remove("visible");
   });
 
-  document.querySelector("#submit-comment")?.addEventListener("click", () => {
+  submitComment?.addEventListener("click", () => {
     const comment = commentText.value.trim();
     if (!comment || !selectedText) return;
+    submitComment.disabled = true;
+    setRequestStatus("Submitting request...", "running");
     fetch(withToken("/api/edit-requests"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: editToken, file: currentFile, selectedText, comment })
     })
-      .then((response) => response.json())
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error || "Request failed.");
+        }
+        return result;
+      })
       .then(() => {
+        setRequestStatus("Queued. Watch Edit requests for elapsed time.", "queued");
         commentPanel.classList.remove("visible");
         selectionTools.classList.remove("visible");
         return refreshEditRequests();
       })
-      .catch(() => refreshEditRequests());
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Could not submit request.";
+        setRequestStatus(message, "failed");
+        return refreshEditRequests();
+      })
+      .finally(() => {
+        submitComment.disabled = false;
+      });
   });
 
   setInterval(() => {
     void refreshEditRequests();
   }, 2500);
 }
+updateRequestTimes();
+setInterval(updateRequestTimes, 1000);
 
 function firstUsefulSelectionRect(range) {
   const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
@@ -507,6 +556,44 @@ function firstUsefulSelectionRect(range) {
   return { left: 12, top: window.innerHeight - 70 };
 }
 
+function plainRect(rect) {
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height
+  };
+}
+
+function positionCommentPanel() {
+  if (!commentPanel) return;
+  if (window.matchMedia("(max-width: 760px)").matches) {
+    commentPanel.style.left = "";
+    commentPanel.style.right = "";
+    commentPanel.style.top = "";
+    commentPanel.style.bottom = "";
+    return;
+  }
+  const rect = selectionRect || { left: 12, top: 64, right: 12, bottom: 92, width: 0, height: 0 };
+  const panelWidth = Math.min(420, window.innerWidth - 24);
+  commentPanel.style.width = panelWidth + "px";
+  commentPanel.style.left = Math.max(12, Math.min(rect.left + rect.width / 2 - panelWidth / 2, window.innerWidth - panelWidth - 12)) + "px";
+  commentPanel.style.right = "auto";
+  commentPanel.style.bottom = "auto";
+  const panelHeight = commentPanel.offsetHeight || 260;
+  const below = rect.bottom + 10;
+  const above = rect.top - panelHeight - 10;
+  commentPanel.style.top = (below + panelHeight <= window.innerHeight - 12 || above < 12 ? below : above) + "px";
+}
+
+function setRequestStatus(message, state) {
+  if (!requestStatus) return;
+  requestStatus.textContent = message;
+  requestStatus.dataset.state = state;
+}
+
 function refreshEditRequests() {
   if (!editRequestList || !editToken) return Promise.resolve();
   return fetch(withToken("/api/edit-requests"))
@@ -514,6 +601,7 @@ function refreshEditRequests() {
     .then((result) => {
       const requests = Array.isArray(result.requests) ? result.requests : [];
       editRequestList.innerHTML = requests.map(renderEditRequest).join("");
+      updateRequestTimes();
     });
 }
 
@@ -522,8 +610,42 @@ function renderEditRequest(request) {
   const provider = String(request.provider || "queue");
   const file = String(request.file || "");
   const message = request.error || request.summary || request.comment || "";
-  return '<div class="edit-request"><strong>' + escapeText(status + " - " + provider) + '</strong>' +
-    '<div>' + escapeText(file) + '</div><div>' + escapeText(String(message).slice(0, 180)) + '</div></div>';
+  const createdAt = String(request.createdAt || "");
+  const updatedAt = String(request.updatedAt || "");
+  return '<div class="edit-request" data-status="' + escapeText(status) + '" data-created-at="' +
+    escapeText(createdAt) + '" data-updated-at="' + escapeText(updatedAt) + '">' +
+    '<div class="request-meta"><strong>' + escapeText(status + " - " + provider) + '</strong>' +
+    '<span class="request-time" data-request-time></span></div>' +
+    '<div class="request-file">' + escapeText(file) + '</div><div class="request-message">' +
+    escapeText(String(message).slice(0, 180)) + '</div></div>';
+}
+
+function updateRequestTimes() {
+  document.querySelectorAll(".edit-request[data-created-at]").forEach((item) => {
+    const target = item.querySelector("[data-request-time]");
+    if (!target) return;
+    const createdAt = Date.parse(item.dataset.createdAt || "");
+    if (Number.isNaN(createdAt)) return;
+    const updatedAt = Date.parse(item.dataset.updatedAt || "");
+    const status = item.dataset.status || "queued";
+    if (status === "succeeded" || status === "failed") {
+      const finishedAt = Number.isNaN(updatedAt) ? Date.now() : updatedAt;
+      target.textContent = "finished in " + formatDuration(finishedAt - createdAt);
+      return;
+    }
+    target.textContent = (status === "running" ? "running for " : "queued for ") +
+      formatDuration(Date.now() - createdAt);
+  });
+}
+
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (totalSeconds < 60) return totalSeconds + "s";
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return minutes + "m " + seconds + "s";
+  const hours = Math.floor(minutes / 60);
+  return hours + "h " + (minutes % 60) + "m";
 }
 
 function escapeText(value) {
@@ -581,7 +703,7 @@ export function buildPreviewPage(input: PreviewPageInput): string {
   const editRequests = input.editRequests
     .map((request) => {
       const message = request.error ?? request.summary ?? request.comment;
-      return `<div class="edit-request"><strong>${escapeHtml(`${request.status} - ${request.provider}`)}</strong><div>${escapeHtml(request.file)}</div><div>${escapeHtml(message.slice(0, 180))}</div></div>`;
+      return `<div class="edit-request" data-status="${escapeHtml(request.status)}" data-created-at="${escapeHtml(request.createdAt)}" data-updated-at="${escapeHtml(request.updatedAt)}"><div class="request-meta"><strong>${escapeHtml(`${request.status} - ${request.provider}`)}</strong><span class="request-time" data-request-time></span></div><div class="request-file">${escapeHtml(request.file)}</div><div class="request-message">${escapeHtml(message.slice(0, 180))}</div></div>`;
     })
     .join("");
 
@@ -635,6 +757,7 @@ export function buildPreviewPage(input: PreviewPageInput): string {
       <button id="cancel-comment" class="secondary" type="button">Cancel</button>
       <button id="submit-comment" type="button">Submit</button>
     </div>
+    <div id="request-status" class="request-status" aria-live="polite"></div>
   </section>
   <script>${clientScript}</script>
 </body>
